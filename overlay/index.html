@@ -567,7 +567,7 @@ let dragging = false, dragStartX = 0, dragStartY = 0, wrapStartX = 0, wrapStartY
 
 function toFixed() {
   const r = stageWrap.getBoundingClientRect();
-  stageWrap.style.bottom = '';
+  stageWrap.style.bottom = 'auto';
   stageWrap.style.left   = r.left + 'px';
   stageWrap.style.top    = r.top  + 'px';
 }
@@ -586,7 +586,7 @@ function restorePos() {
   if (!raw) return;
   try {
     const p = JSON.parse(raw);
-    stageWrap.style.bottom = '';
+    stageWrap.style.bottom = 'auto';
     stageWrap.style.left   = (p.left * window.innerWidth)  + 'px';
     stageWrap.style.top    = (p.top  * window.innerHeight) + 'px';
     dragReset.classList.add('visible');
