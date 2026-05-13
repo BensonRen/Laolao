@@ -88,6 +88,7 @@ log = logging.getLogger("laolao")
 
 _clients: set = set()
 _ws_loop: Optional[asyncio.AbstractEventLoop] = None
+_processor: Optional["UtteranceProcessor"] = None
 
 
 async def _broadcast(msg: dict) -> None:
@@ -113,7 +114,15 @@ async def _ws_handler(ws) -> None:
     log.debug("WS client connected: %s", ws.remote_address)
     _clients.add(ws)
     try:
-        await ws.wait_closed()
+        async for raw in ws:
+            try:
+                cmd = json.loads(raw)
+            except Exception:
+                continue
+            if cmd.get("type") == "set_language" and _processor:
+                _processor.set_language(cmd.get("language", "zh"))
+    except websockets.ConnectionClosed:
+        pass
     finally:
         _clients.discard(ws)
         log.debug("WS client disconnected.")
@@ -178,6 +187,21 @@ class UtteranceProcessor:
         self._n_finals = 0
         self._n_rejected = 0
         self._latencies: list[float] = []   # ms, capped at last 50
+
+    def set_language(self, language: str) -> None:
+        """Hot-swap transcription language from the overlay UI."""
+        self._language = language if language != "auto" else None
+        _cjk = {"zh", "yue", "ja", "ko"}
+        lang_key = (language or "").lower()
+        self._max_chars_per_sec = 10.0 if lang_key in _cjk else 20.0
+        if lang_key in {"zh", "yue"}:
+            from opencc import OpenCC
+            self._opencc = OpenCC('t2s')
+        else:
+            self._opencc = None
+        self._cfg["language"] = language
+        log.info("Language → %s", language)
+        self._push_stats()
 
     def _to_simplified(self, text: str) -> str:
         return self._opencc.convert(text) if self._opencc else text
@@ -427,9 +451,11 @@ def main() -> None:
     from backends import get_backend
     from vad import get_vad
 
-    backend   = get_backend(cfg)
-    vad       = get_vad(cfg)
-    processor = UtteranceProcessor(backend, vad, cfg)
+    global _processor
+    backend    = get_backend(cfg)
+    vad        = get_vad(cfg)
+    processor  = UtteranceProcessor(backend, vad, cfg)
+    _processor = processor
 
     chunk_samples = int(16_000 * cfg["chunk_ms"] / 1000)
     audio_thread = threading.Thread(

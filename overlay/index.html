@@ -7,229 +7,140 @@
   <style>
     @font-face {
       font-family: 'NotoSansSC';
-      src: local('Noto Sans SC'),
-           local('NotoSansSC'),
-           local('华文黑体'),
-           local('STHeiti'),
-           local('Microsoft YaHei'),
-           local('微软雅黑');
+      src: local('Noto Sans SC'), local('NotoSansSC'), local('华文黑体'),
+           local('STHeiti'), local('Microsoft YaHei'), local('微软雅黑');
     }
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --font-size: 72px;
+      --font-size: 52px;
       --bg: rgba(0, 0, 0, 0.72);
       --color-final: #ffffff;
       --color-partial: #ffe066;
-      --padding: 24px 36px;
-      --border-radius: 16px;
+      --padding: 16px 28px;
+      --border-radius: 14px;
       --fade-ms: 4000;
       --transition: 0.25s ease;
     }
 
     html, body {
-      width: 100%;
-      height: 100%;
+      width: 100%; height: 100%;
       background: #000;
       overflow: hidden;
+      user-select: none;
     }
 
-    /* Portrait preview mode: constrains to 9:16 centered in the browser tab */
+    /* ── Portrait preview ── */
     body.portrait-preview {
       display: flex;
       align-items: center;
       justify-content: center;
       background: #111;
     }
-
     body.portrait-preview #viewport {
       position: relative;
-      /* On a landscape monitor: width is the limiting axis (9/16 of height) */
       width: min(calc(100vh * 9 / 16), 100vw);
       height: min(calc(100vw * 16 / 9), 100vh);
       overflow: hidden;
       flex-shrink: 0;
     }
-
     body.portrait-preview #camera,
-    body.portrait-preview #picker,
-    body.portrait-preview #stage {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-    }
+    body.portrait-preview #picker { position: absolute; inset: 0; width: 100%; height: 100%; }
 
-    body.portrait-preview #stage {
-      height: auto;
-      top: auto;
-      bottom: 60px;
-      left: 5%;
-      right: 5%;
-      width: auto;
-    }
+    /* ── Camera ── */
+    #camera { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 
-    /* ── Camera feed ── */
-    #camera {
-      position: fixed;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-
-    /* ── Camera picker UI (shown until camera is selected) ── */
+    /* ── Camera picker ── */
     #picker {
-      position: fixed;
-      inset: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
       gap: 20px;
-      background: rgba(0, 0, 0, 0.85);
+      background: rgba(0,0,0,0.85);
       color: #fff;
       font-family: 'PingFang SC', 'Helvetica Neue', sans-serif;
       z-index: 100;
     }
-
-    #picker h1 {
-      font-size: 28px;
-      font-weight: 600;
-      letter-spacing: 0.05em;
-    }
-
-    #picker p {
-      font-size: 15px;
-      color: #aaa;
-    }
-
+    #picker h1 { font-size: 28px; font-weight: 600; letter-spacing: 0.05em; }
+    #picker p  { font-size: 15px; color: #aaa; }
+    #picker.hidden { display: none; }
     #cam-select {
-      font-size: 17px;
-      padding: 10px 18px;
-      border-radius: 10px;
-      border: 1px solid #555;
-      background: #1c1c1e;
-      color: #fff;
-      min-width: 320px;
-      cursor: pointer;
+      font-size: 17px; padding: 10px 18px; border-radius: 10px;
+      border: 1px solid #555; background: #1c1c1e; color: #fff;
+      min-width: 320px; cursor: pointer;
     }
-
     #cam-select option { background: #1c1c1e; }
-
     #start-btn {
-      font-size: 17px;
-      padding: 12px 40px;
-      border-radius: 10px;
-      border: none;
-      background: #0a84ff;
-      color: #fff;
-      cursor: pointer;
-      font-weight: 600;
+      font-size: 17px; padding: 12px 40px; border-radius: 10px;
+      border: none; background: #0a84ff; color: #fff; cursor: pointer; font-weight: 600;
     }
-
     #start-btn:hover { background: #0071e3; }
 
-    #picker.hidden { display: none; }
-
-    /* ── Caption stage ── */
-    #stage {
-      position: fixed;
-      bottom: 60px;
-      left: 5%;
-      right: 5%;
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 12px;
-      pointer-events: none;
-      z-index: 10;
+    /* ── Top toolbar ── */
+    #toolbar {
+      position: fixed; top: 0; left: 0; right: 0;
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      z-index: 200;
+      font-family: 'SF Mono', 'Menlo', monospace;
     }
 
-    .line {
-      display: inline-block;
-      max-width: 100%;
-      background: var(--bg);
-      color: var(--color-final);
-      font-family: 'NotoSansSC', 'Noto Sans SC', 'PingFang SC', '华文黑体',
-                   'STHeiti', 'Microsoft YaHei', '微软雅黑',
-                   'Hiragino Sans GB', sans-serif;
-      font-size: var(--font-size);
-      font-weight: 600;
-      line-height: 1.3;
-      letter-spacing: 0.02em;
-      padding: var(--padding);
-      border-radius: var(--border-radius);
-      word-break: break-all;
-      opacity: 1;
-      transition: opacity var(--transition), transform var(--transition);
-      transform: translateY(0);
+    .tb-label {
+      font-size: 11px; color: #888; letter-spacing: 0.08em;
+      text-transform: uppercase; padding-right: 4px;
     }
 
-    .line.partial { color: var(--color-partial); }
-
-    .line.fading {
-      opacity: 0;
-      transform: translateY(-8px);
+    .tb-select {
+      font-size: 13px; padding: 4px 10px; border-radius: 7px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.07); color: #fff;
+      cursor: pointer; outline: none;
     }
+    .tb-select option { background: #1c1c1e; }
+
+    .tb-sep { width: 1px; height: 20px; background: rgba(255,255,255,0.12); margin: 0 4px; }
+
+    .ratio-btn {
+      font-size: 12px; padding: 4px 10px; border-radius: 7px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.07); color: #aaa;
+      cursor: pointer; white-space: nowrap;
+    }
+    .ratio-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
+    .ratio-btn.active { border-color: #0a84ff; color: #0a84ff; background: rgba(10,132,255,0.15); }
+
+    .tb-spacer { flex: 1; }
+
+    .tb-btn {
+      font-size: 12px; padding: 4px 12px; border-radius: 7px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.07); color: #aaa;
+      cursor: pointer;
+    }
+    .tb-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
+    .tb-btn.active { border-color: #0a84ff; color: #0a84ff; }
 
     /* ── Debug panel ── */
-    #hud {
-      position: fixed;
-      top: 14px;
-      right: 14px;
-      z-index: 200;
-      display: flex;
-      gap: 6px;
-      pointer-events: all;
-    }
-
-    #hud button {
-      background: rgba(0,0,0,0.55);
-      border: 1px solid rgba(255,255,255,0.18);
-      color: #fff;
-      font-family: 'SF Mono', 'Menlo', monospace;
-      font-size: 12px;
-      padding: 5px 12px;
-      border-radius: 8px;
-      cursor: pointer;
-      backdrop-filter: blur(6px);
-    }
-    #hud button:hover { background: rgba(0,0,0,0.8); }
-    #hud button.active { border-color: #0a84ff; color: #0a84ff; }
-
     #debug-panel {
-      position: fixed;
-      top: 44px;
-      right: 14px;
-      z-index: 200;
-      background: rgba(0,0,0,0.82);
+      position: fixed; top: 48px; right: 14px; z-index: 200;
+      background: rgba(0,0,0,0.88);
       border: 1px solid rgba(255,255,255,0.12);
-      border-radius: 12px;
-      padding: 14px 18px;
+      border-radius: 12px; padding: 14px 18px;
       font-family: 'SF Mono', 'Menlo', monospace;
-      font-size: 12px;
-      color: #e0e0e0;
-      min-width: 240px;
-      backdrop-filter: blur(10px);
-      line-height: 1.9;
+      font-size: 12px; color: #e0e0e0; min-width: 240px;
+      backdrop-filter: blur(10px); line-height: 1.9;
       pointer-events: all;
     }
     #debug-panel.hidden { display: none; }
-
     #debug-panel .section {
-      color: #888;
-      font-size: 10px;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      margin-top: 10px;
-      margin-bottom: 2px;
-      border-top: 1px solid rgba(255,255,255,0.07);
-      padding-top: 8px;
+      color: #888; font-size: 10px; text-transform: uppercase;
+      letter-spacing: 0.1em; margin-top: 10px; margin-bottom: 2px;
+      border-top: 1px solid rgba(255,255,255,0.07); padding-top: 8px;
     }
-    #debug-panel .section:first-child { margin-top: 0; border-top: none; padding-top: 0; }
-
+    #debug-panel .section:first-child { margin-top:0; border-top:none; padding-top:0; }
     #debug-panel .row { display: flex; justify-content: space-between; gap: 16px; }
     #debug-panel .label { color: #888; }
     #debug-panel .val { color: #fff; font-weight: 600; }
@@ -237,9 +148,65 @@
     #debug-panel .val.warn { color: #ffd60a; }
     #debug-panel .val.bad  { color: #ff453a; }
 
-    /* ── OBS chroma key mode ── */
+    /* ── Caption stage (draggable) ── */
+    #stage-wrap {
+      position: fixed;
+      bottom: 60px; left: 5%; right: 5%;
+      z-index: 10;
+      cursor: grab;
+    }
+    #stage-wrap:active { cursor: grabbing; }
+    #stage-wrap.dragging { cursor: grabbing; }
+
+    #drag-handle {
+      display: flex; align-items: center; justify-content: center;
+      height: 18px; margin-bottom: 4px;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    #stage-wrap:hover #drag-handle { opacity: 1; }
+    #drag-handle::before {
+      content: '⠿';
+      color: rgba(255,255,255,0.5);
+      font-size: 14px;
+      letter-spacing: 2px;
+    }
+
+    #drag-reset {
+      position: absolute; top: -2px; right: 0;
+      font-size: 10px; padding: 2px 8px; border-radius: 5px;
+      border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(0,0,0,0.6); color: #aaa;
+      cursor: pointer; display: none;
+    }
+    #drag-reset.visible { display: block; }
+    #drag-reset:hover { color: #fff; }
+
+    #stage {
+      display: flex; flex-direction: column;
+      align-items: flex-start; gap: 10px;
+      pointer-events: none;
+    }
+
+    .line {
+      display: inline-block; max-width: 100%;
+      background: var(--bg); color: var(--color-final);
+      font-family: 'NotoSansSC','Noto Sans SC','PingFang SC','华文黑体',
+                   'STHeiti','Microsoft YaHei','微软雅黑','Hiragino Sans GB',sans-serif;
+      font-size: var(--font-size); font-weight: 600;
+      line-height: 1.3; letter-spacing: 0.02em;
+      padding: var(--padding); border-radius: var(--border-radius);
+      word-break: break-all; opacity: 1;
+      transition: opacity var(--transition), transform var(--transition);
+      transform: translateY(0);
+    }
+    .line.partial { color: var(--color-partial); }
+    .line.fading  { opacity: 0; transform: translateY(-8px); }
+
+    /* ── OBS chroma key ── */
     body.chromakey { background: #00ff00; }
     body.chromakey #camera { display: none; }
+    body.chromakey #toolbar { display: none; }
     body.chromakey .line {
       background: transparent;
       text-shadow: 2px 2px 8px rgba(0,0,0,0.9), -1px -1px 4px rgba(0,0,0,0.9);
@@ -248,122 +215,184 @@
 </head>
 <body>
 
-<div id="hud">
-  <button id="portrait-toggle">9:16</button>
-  <button id="debug-toggle">Stats</button>
+<!-- Top toolbar -->
+<div id="toolbar">
+  <span class="tb-label">Lang</span>
+  <select id="lang-select" class="tb-select">
+    <option value="zh">普通话</option>
+    <option value="yue">粤语</option>
+    <option value="en">English</option>
+    <option value="ja">日本語</option>
+    <option value="ko">한국어</option>
+    <option value="auto">Auto</option>
+  </select>
+
+  <div class="tb-sep"></div>
+  <span class="tb-label">Ratio</span>
+  <button class="ratio-btn" data-ratio="9:16">9∶16</button>
+  <button class="ratio-btn" data-ratio="16:9">16∶9</button>
+  <button class="ratio-btn" data-ratio="4:3">4∶3</button>
+  <button class="ratio-btn" data-ratio="1:1">1∶1</button>
+  <button class="ratio-btn active" data-ratio="free">Full</button>
+
+  <div class="tb-spacer"></div>
+  <button id="debug-toggle" class="tb-btn">Stats</button>
 </div>
+
+<!-- Debug panel -->
 <div id="debug-panel" class="hidden">
   <div class="section">Connection</div>
   <div class="row"><span class="label">Status</span><span class="val" id="db-ws-status">–</span></div>
   <div class="row"><span class="label">Reconnects</span><span class="val" id="db-reconnects">0</span></div>
-
   <div class="section">Server</div>
   <div class="row"><span class="label">Backend</span><span class="val" id="db-backend">–</span></div>
   <div class="row"><span class="label">Model</span><span class="val" id="db-model">–</span></div>
   <div class="row"><span class="label">Language</span><span class="val" id="db-lang">–</span></div>
   <div class="row"><span class="label">Uptime</span><span class="val" id="db-uptime">–</span></div>
-
   <div class="section">Transcriptions</div>
   <div class="row"><span class="label">Partials</span><span class="val" id="db-partials">0</span></div>
   <div class="row"><span class="label">Finals</span><span class="val" id="db-finals">0</span></div>
   <div class="row"><span class="label">Rejected</span><span class="val" id="db-rejected">0</span></div>
-
   <div class="section">Latency (last 50)</div>
   <div class="row"><span class="label">Last</span><span class="val" id="db-lat-last">–</span></div>
   <div class="row"><span class="label">Avg</span><span class="val" id="db-lat-avg">–</span></div>
   <div class="row"><span class="label">Min / Max</span><span class="val" id="db-lat-minmax">–</span></div>
 </div>
 
+<!-- Camera -->
 <div id="viewport">
-<video id="camera" autoplay playsinline muted></video>
-
-<!-- Camera selection UI -->
-<div id="picker">
-  <h1>老老 Laolao</h1>
-  <p>Select the camera to use for captions</p>
-  <select id="cam-select"><option value="">Loading cameras…</option></select>
-  <button id="start-btn">Start</button>
+  <video id="camera" autoplay playsinline muted></video>
+  <div id="picker">
+    <h1>老老 Laolao</h1>
+    <p>Select the camera to use for captions</p>
+    <select id="cam-select"><option value="">Loading cameras…</option></select>
+    <button id="start-btn">Start</button>
+  </div>
 </div>
 
-<div id="stage"></div>
-</div><!-- #viewport -->
+<!-- Draggable subtitle area -->
+<div id="stage-wrap">
+  <div id="drag-handle"><button id="drag-reset">Reset position</button></div>
+  <div id="stage"></div>
+</div>
 
 <script>
-// ─── URL parameter overrides ───────────────────────────────────
-const params = new URLSearchParams(location.search);
-
-const FONT_SIZE  = params.get('fontsize') || '72';
+// ─── URL params ────────────────────────────────────────────────
+const params     = new URLSearchParams(location.search);
+const FONT_SIZE  = params.get('fontsize') || '52';
 const BG_COLOR   = params.get('bg')       || 'rgba(0,0,0,0.72)';
 const WS_PORT    = params.get('port')     || '8765';
 const MAX_LINES  = parseInt(params.get('maxlines') || '3', 10);
 const FADE_MS    = parseInt(params.get('fadems')   || '4000', 10);
 const CHROMA_KEY = params.has('chromakey');
-const PORTRAIT   = params.has('portrait');
 
 document.documentElement.style.setProperty('--font-size', FONT_SIZE + 'px');
 document.documentElement.style.setProperty('--bg', BG_COLOR);
 document.documentElement.style.setProperty('--fade-ms', FADE_MS + 'ms');
 if (CHROMA_KEY) document.body.classList.add('chromakey');
-if (PORTRAIT)   document.body.classList.add('portrait-preview');
 
-// ─── Camera setup ──────────────────────────────────────────────
-const camVideo   = document.getElementById('camera');
-const picker     = document.getElementById('picker');
-const camSelect  = document.getElementById('cam-select');
-const startBtn   = document.getElementById('start-btn');
+// ─── Aspect ratio ──────────────────────────────────────────────
+const RATIO_KEY = 'laolao_ratio';
+const RATIOS = {
+  '9:16':  { w: 9,  h: 16 },
+  '16:9':  { w: 16, h: 9  },
+  '4:3':   { w: 4,  h: 3  },
+  '1:1':   { w: 1,  h: 1  },
+  'free':  null,
+};
 
+const viewport = document.getElementById('viewport');
+
+function applyRatio(key) {
+  const r = RATIOS[key];
+  document.querySelectorAll('.ratio-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.ratio === key);
+  });
+  if (!r) {
+    // Full window
+    document.body.classList.remove('portrait-preview');
+    viewport.style.cssText = '';
+    localStorage.setItem(RATIO_KEY, key);
+    return;
+  }
+  // Constrain viewport to chosen ratio, centered
+  document.body.style.display = 'flex';
+  document.body.style.alignItems = 'center';
+  document.body.style.justifyContent = 'center';
+  document.body.style.background = '#111';
+  viewport.style.position = 'relative';
+  viewport.style.overflow = 'hidden';
+  viewport.style.flexShrink = '0';
+  viewport.style.width  = `min(calc(100vh * ${r.w} / ${r.h}), 100vw)`;
+  viewport.style.height = `min(calc(100vw * ${r.h} / ${r.w}), 100vh)`;
+  // Absolute-position camera inside viewport
+  const cam = document.getElementById('camera');
+  cam.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;';
+  localStorage.setItem(RATIO_KEY, key);
+}
+
+document.querySelectorAll('.ratio-btn').forEach(btn => {
+  btn.addEventListener('click', () => applyRatio(btn.dataset.ratio));
+});
+
+applyRatio(localStorage.getItem(RATIO_KEY) || 'free');
+
+// ─── Language selector ─────────────────────────────────────────
+const LANG_KEY    = 'laolao_language';
+const langSelect  = document.getElementById('lang-select');
+
+function applyLanguage(lang, sendToServer = true) {
+  langSelect.value = lang;
+  localStorage.setItem(LANG_KEY, lang);
+  if (sendToServer && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'set_language', language: lang }));
+  }
+}
+
+langSelect.addEventListener('change', () => applyLanguage(langSelect.value));
+
+const savedLang = localStorage.getItem(LANG_KEY) || 'zh';
+langSelect.value = savedLang;
+
+// ─── Camera ────────────────────────────────────────────────────
+const camVideo  = document.getElementById('camera');
+const picker    = document.getElementById('picker');
+const camSelect = document.getElementById('cam-select');
+const startBtn  = document.getElementById('start-btn');
 const SAVED_CAM_KEY = 'laolao_camera_id';
 
 async function populateCameras() {
-  // Need a temporary stream to prompt permission before enumerateDevices returns labels
-  let tempStream = null;
-  try {
-    tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-  } catch (e) {
-    camSelect.innerHTML = '<option value="">Camera permission denied</option>';
-    return;
-  }
-
+  let tmp;
+  try { tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); }
+  catch { camSelect.innerHTML = '<option value="">Camera permission denied</option>'; return; }
   const devices = await navigator.mediaDevices.enumerateDevices();
-  const cameras = devices.filter(d => d.kind === 'videoinput');
-
-  tempStream.getTracks().forEach(t => t.stop());
-
+  tmp.getTracks().forEach(t => t.stop());
   camSelect.innerHTML = '';
   const savedId = localStorage.getItem(SAVED_CAM_KEY);
-
-  cameras.forEach((cam, i) => {
+  devices.filter(d => d.kind === 'videoinput').forEach((cam, i) => {
     const opt = document.createElement('option');
     opt.value = cam.deviceId;
     opt.textContent = cam.label || `Camera ${i + 1}`;
     if (cam.deviceId === savedId) opt.selected = true;
     camSelect.appendChild(opt);
   });
-
-  if (!cameras.length) {
-    camSelect.innerHTML = '<option value="">No cameras found</option>';
-  }
+  if (!camSelect.options.length) camSelect.innerHTML = '<option value="">No cameras found</option>';
 }
 
 async function startCamera(deviceId) {
-  const constraints = {
+  const stream = await navigator.mediaDevices.getUserMedia({
     video: deviceId ? { deviceId: { exact: deviceId } } : true,
     audio: false,
-  };
-  const stream = await navigator.mediaDevices.getUserMedia(constraints);
+  });
   camVideo.srcObject = stream;
   localStorage.setItem(SAVED_CAM_KEY, deviceId);
   picker.classList.add('hidden');
 }
 
 startBtn.addEventListener('click', () => {
-  const deviceId = camSelect.value;
-  startCamera(deviceId).catch(err => {
-    alert('Could not start camera: ' + err.message);
-  });
+  startCamera(camSelect.value).catch(e => alert('Could not start camera: ' + e.message));
 });
 
-// Auto-start with saved camera if available
 async function init() {
   await populateCameras();
   const savedId = localStorage.getItem(SAVED_CAM_KEY);
@@ -371,13 +400,86 @@ async function init() {
     startCamera(savedId).catch(() => {});
   }
 }
-
 init();
+
+// ─── Draggable subtitle stage ──────────────────────────────────
+const stageWrap = document.getElementById('stage-wrap');
+const dragReset = document.getElementById('drag-reset');
+const STAGE_POS_KEY = 'laolao_stage_pos';
+
+let dragging = false, dragStartX = 0, dragStartY = 0, wrapStartX = 0, wrapStartY = 0;
+
+function toFixed() {
+  // Switch from bottom/left/right anchoring to top/left pixel positioning
+  const r = stageWrap.getBoundingClientRect();
+  stageWrap.style.bottom = '';
+  stageWrap.style.right  = '';
+  stageWrap.style.left   = r.left + 'px';
+  stageWrap.style.top    = r.top  + 'px';
+  stageWrap.style.width  = r.width + 'px';
+}
+
+function savePos() {
+  const r = stageWrap.getBoundingClientRect();
+  localStorage.setItem(STAGE_POS_KEY, JSON.stringify({
+    left: r.left / window.innerWidth,
+    top:  r.top  / window.innerHeight,
+    w:    r.width / window.innerWidth,
+  }));
+  dragReset.classList.add('visible');
+}
+
+function restorePos() {
+  const raw = localStorage.getItem(STAGE_POS_KEY);
+  if (!raw) return;
+  try {
+    const p = JSON.parse(raw);
+    stageWrap.style.bottom = '';
+    stageWrap.style.right  = '';
+    stageWrap.style.left   = (p.left * window.innerWidth)  + 'px';
+    stageWrap.style.top    = (p.top  * window.innerHeight) + 'px';
+    stageWrap.style.width  = (p.w    * window.innerWidth)  + 'px';
+    dragReset.classList.add('visible');
+  } catch {}
+}
+
+stageWrap.addEventListener('pointerdown', e => {
+  if (e.target === dragReset) return;
+  dragging = true;
+  stageWrap.setPointerCapture(e.pointerId);
+  stageWrap.classList.add('dragging');
+  if (!stageWrap.style.top) toFixed();
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
+  wrapStartX = parseFloat(stageWrap.style.left) || 0;
+  wrapStartY = parseFloat(stageWrap.style.top)  || 0;
+});
+
+stageWrap.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  stageWrap.style.left = (wrapStartX + e.clientX - dragStartX) + 'px';
+  stageWrap.style.top  = (wrapStartY + e.clientY - dragStartY) + 'px';
+});
+
+stageWrap.addEventListener('pointerup', e => {
+  if (!dragging) return;
+  dragging = false;
+  stageWrap.classList.remove('dragging');
+  savePos();
+});
+
+dragReset.addEventListener('click', e => {
+  e.stopPropagation();
+  stageWrap.style.cssText = 'position:fixed;bottom:60px;left:5%;right:5%;z-index:10;cursor:grab;';
+  localStorage.removeItem(STAGE_POS_KEY);
+  dragReset.classList.remove('visible');
+});
+
+restorePos();
 
 // ─── Caption state ─────────────────────────────────────────────
 const stage = document.getElementById('stage');
-let partialEl = null;
-let finalLines = [];
+let partialEl = null, finalLines = [];
 
 function createLine(text, isPartial) {
   const el = document.createElement('div');
@@ -388,18 +490,14 @@ function createLine(text, isPartial) {
 
 function addFinalLine(text) {
   if (partialEl) { stage.removeChild(partialEl); partialEl = null; }
-
   const el = createLine(text, false);
   stage.appendChild(el);
-
   while (finalLines.length >= MAX_LINES) {
     const oldest = finalLines.shift();
     clearTimeout(oldest.fadeTimer);
     if (oldest.el.parentNode) stage.removeChild(oldest.el);
   }
-
-  const fadeTimer = setTimeout(() => fadeLine(el), FADE_MS);
-  finalLines.push({ el, fadeTimer });
+  finalLines.push({ el, fadeTimer: setTimeout(() => fadeLine(el), FADE_MS) });
 }
 
 function fadeLine(el) {
@@ -411,78 +509,54 @@ function fadeLine(el) {
 }
 
 function setPartial(text) {
-  if (!partialEl) {
-    partialEl = createLine(text, true);
-    stage.appendChild(partialEl);
-  } else {
-    partialEl.textContent = text;
-  }
+  if (!partialEl) { partialEl = createLine(text, true); stage.appendChild(partialEl); }
+  else partialEl.textContent = text;
 }
-
-// ─── Portrait toggle ───────────────────────────────────────────
-const portraitBtn = document.getElementById('portrait-toggle');
-const PORTRAIT_KEY = 'laolao_portrait';
-
-function applyPortrait(on) {
-  document.body.classList.toggle('portrait-preview', on);
-  portraitBtn.classList.toggle('active', on);
-  localStorage.setItem(PORTRAIT_KEY, on ? '1' : '');
-}
-
-portraitBtn.addEventListener('click', () => {
-  applyPortrait(!document.body.classList.contains('portrait-preview'));
-});
-
-// Restore saved state (URL param OR localStorage)
-applyPortrait(PORTRAIT || !!localStorage.getItem(PORTRAIT_KEY));
 
 // ─── Debug panel ───────────────────────────────────────────────
 const debugToggle = document.getElementById('debug-toggle');
 const debugPanel  = document.getElementById('debug-panel');
-debugToggle.addEventListener('click', () => debugPanel.classList.toggle('hidden'));
-document.addEventListener('keydown', e => { if (e.key === 'd') debugPanel.classList.toggle('hidden'); });
+debugToggle.addEventListener('click', () => {
+  debugPanel.classList.toggle('hidden');
+  debugToggle.classList.toggle('active');
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'd') { debugPanel.classList.toggle('hidden'); debugToggle.classList.toggle('active'); }
+});
 
 function $d(id) { return document.getElementById(id); }
-
 function setVal(id, text, cls) {
-  const el = $d(id);
-  el.textContent = text;
+  const el = $d(id); el.textContent = text;
   el.className = 'val' + (cls ? ' ' + cls : '');
 }
-
 function fmtUptime(s) {
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
   return h ? `${h}h ${m}m` : m ? `${m}m ${sec}s` : `${sec}s`;
 }
-
 function fmtLat(ms) {
-  if (ms == null) return '–';
-  const cls = ms < 500 ? 'good' : ms < 1500 ? 'warn' : 'bad';
-  return [ms + ' ms', cls];
+  if (ms == null) return ['–', ''];
+  return [ms + ' ms', ms < 500 ? 'good' : ms < 1500 ? 'warn' : 'bad'];
 }
 
-let wsReconnects = -1; // first connect doesn't count
+let wsReconnects = -1;
 
 function updateDebugStats(s) {
-  const t = s.transcriptions;
+  const t = s.transcriptions, l = s.latency_ms;
   setVal('db-backend', s.backend || '–');
   setVal('db-model',   s.model   || '–');
   setVal('db-lang',    s.language || '–');
   setVal('db-uptime',  fmtUptime(s.uptime_s || 0));
-  setVal('db-partials',  t.partials);
-  setVal('db-finals',    t.finals);
-  setVal('db-rejected',  t.rejected, t.rejected > 0 ? 'warn' : '');
-  const l = s.latency_ms;
-  const [lastTxt, lastCls] = fmtLat(l.last);
-  const [avgTxt,  avgCls]  = fmtLat(l.avg);
-  setVal('db-lat-last',   lastTxt, lastCls);
-  setVal('db-lat-avg',    avgTxt,  avgCls);
+  setVal('db-partials', t.partials);
+  setVal('db-finals',   t.finals);
+  setVal('db-rejected', t.rejected, t.rejected > 0 ? 'warn' : '');
+  const [lt, lc] = fmtLat(l.last), [at, ac] = fmtLat(l.avg);
+  setVal('db-lat-last',   lt, lc);
+  setVal('db-lat-avg',    at, ac);
   setVal('db-lat-minmax', l.min != null ? `${l.min} / ${l.max} ms` : '–');
 }
 
-// ─── WebSocket connection with auto-reconnect ──────────────────
-let ws = null;
-let reconnectDelay = 1000;
+// ─── WebSocket ─────────────────────────────────────────────────
+let ws = null, reconnectDelay = 1000;
 
 function connect() {
   const url = `ws://localhost:${WS_PORT}`;
@@ -493,33 +567,29 @@ function connect() {
     wsReconnects++;
     setVal('db-ws-status', '● Connected', 'good');
     setVal('db-reconnects', wsReconnects);
+    // Sync saved language to server on reconnect
+    applyLanguage(localStorage.getItem(LANG_KEY) || 'zh', true);
   };
 
   ws.onmessage = (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
 
-    if (msg.type === 'stats') {
-      updateDebugStats(msg);
-      return;
-    }
+    if (msg.type === 'stats') { updateDebugStats(msg); return; }
 
     const text = (msg.text || '').trim();
     if (!text) return;
 
-    if (msg.type === 'partial') {
-      setPartial(text);
-    } else if (msg.type === 'final') {
-      addFinalLine(text);
-    } else if (msg.type === 'clear') {
+    if      (msg.type === 'partial') setPartial(text);
+    else if (msg.type === 'final')   addFinalLine(text);
+    else if (msg.type === 'clear') {
       if (partialEl) { stage.removeChild(partialEl); partialEl = null; }
       finalLines.forEach(l => { clearTimeout(l.fadeTimer); stage.removeChild(l.el); });
       finalLines = [];
     }
   };
 
-  ws.onerror = (e) => console.warn('[laolao] WS error', e);
-
+  ws.onerror = e => console.warn('[laolao] WS error', e);
   ws.onclose = () => {
     ws = null;
     setVal('db-ws-status', '○ Disconnected', 'bad');
