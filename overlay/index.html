@@ -179,40 +179,55 @@
     /* ── Caption stage (draggable) ── */
     #stage-wrap {
       position: fixed;
-      bottom: 60px; left: 5%; right: 5%;
+      bottom: 60px; left: 5%;
       z-index: 10;
-      cursor: grab;
+      display: flex;
+      flex-direction: row;
+      align-items: flex-end;
+      gap: 6px;
     }
-    #stage-wrap:active { cursor: grabbing; }
-    #stage-wrap.dragging { cursor: grabbing; }
 
-    #drag-handle {
-      display: flex; align-items: center; justify-content: center; gap: 6px;
-      height: 22px; margin-bottom: 6px;
-      opacity: 0.25;
+    /* Left-side grip — sits right before the first caption */
+    #drag-grip {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 3px;
+      padding-bottom: 18px;
+      cursor: grab;
+      opacity: 0.2;
       transition: opacity 0.2s;
+      flex-shrink: 0;
+      user-select: none;
     }
-    #stage-wrap:hover #drag-handle { opacity: 0.85; }
-    #drag-handle::before {
-      content: '⠿⠿';
-      color: #fff;
-      font-size: 13px;
-      letter-spacing: 3px;
+    #stage-wrap:hover #drag-grip { opacity: 0.75; }
+    #stage-wrap.dragging #drag-grip { cursor: grabbing; opacity: 1; }
+    #drag-grip-dots {
+      display: flex; flex-direction: column; gap: 3px;
+    }
+    #drag-grip-dots span {
+      display: flex; gap: 3px;
+    }
+    #drag-grip-dots i {
+      display: block; width: 3px; height: 3px;
+      border-radius: 50%; background: #fff;
+      font-style: normal;
     }
     #drag-hint-text {
       font-family: 'SF Mono', 'Menlo', monospace;
-      font-size: 11px;
-      color: rgba(255,255,255,0.75);
-      letter-spacing: 0.04em;
-      pointer-events: none;
+      font-size: 10px; color: rgba(255,255,255,0.6);
+      letter-spacing: 0.03em; white-space: nowrap;
+      margin-top: 4px;
     }
 
     #drag-reset {
-      position: absolute; top: -2px; right: 0;
+      position: absolute; bottom: -22px; left: 0;
       font-size: 10px; padding: 2px 8px; border-radius: 5px;
       border: 1px solid rgba(255,255,255,0.2);
       background: rgba(0,0,0,0.6); color: #aaa;
-      cursor: pointer; display: none;
+      cursor: pointer; display: none; pointer-events: all;
+      white-space: nowrap;
     }
     #drag-reset.visible { display: block; }
     #drag-reset:hover { color: #fff; }
@@ -322,9 +337,15 @@
 
 <!-- Draggable subtitle area -->
 <div id="stage-wrap">
-  <div id="drag-handle">
-    <span id="drag-hint-text">drag to move</span>
-    <button id="drag-reset">Reset</button>
+  <div id="drag-grip">
+    <div id="drag-grip-dots">
+      <span><i></i><i></i></span>
+      <span><i></i><i></i></span>
+      <span><i></i><i></i></span>
+      <span><i></i><i></i></span>
+    </div>
+    <span id="drag-hint-text">drag</span>
+    <button id="drag-reset">↩ reset</button>
   </div>
   <div id="stage"></div>
 </div>
@@ -361,27 +382,35 @@ function applyRatio(key) {
   document.querySelectorAll('.ratio-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.ratio === key);
   });
+  localStorage.setItem(RATIO_KEY, key);
+
   if (!r) {
-    // Full window
-    document.body.classList.remove('portrait-preview');
+    // Full window — just remove any constraints
+    document.body.style.cssText = '';
     viewport.style.cssText = '';
-    localStorage.setItem(RATIO_KEY, key);
     return;
   }
-  // Constrain viewport to chosen ratio, centered
-  document.body.style.display = 'flex';
-  document.body.style.alignItems = 'center';
-  document.body.style.justifyContent = 'center';
-  document.body.style.background = '#111';
-  viewport.style.position = 'relative';
-  viewport.style.overflow = 'hidden';
-  viewport.style.flexShrink = '0';
-  viewport.style.width  = `min(calc(100vh * ${r.w} / ${r.h}), 100vw)`;
-  viewport.style.height = `min(calc(100vw * ${r.h} / ${r.w}), 100vh)`;
-  // Absolute-position camera inside viewport
-  const cam = document.getElementById('camera');
-  cam.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;';
-  localStorage.setItem(RATIO_KEY, key);
+
+  // Resize the browser window to match the ratio, fit within available screen
+  const availW = window.screen.availWidth  - 40;
+  const availH = window.screen.availHeight - 40;
+  let w, h;
+  if (r.w / r.h <= availW / availH) {
+    // height-constrained
+    h = availH; w = Math.round(h * r.w / r.h);
+  } else {
+    // width-constrained
+    w = availW; h = Math.round(w * r.h / r.w);
+  }
+  window.resizeTo(w, h);
+  window.moveTo(
+    Math.round((window.screen.availWidth  - w) / 2),
+    Math.round((window.screen.availHeight - h) / 2)
+  );
+
+  // Remove any CSS viewport overrides — window IS the right shape now
+  document.body.style.cssText = '';
+  viewport.style.cssText = '';
 }
 
 document.querySelectorAll('.ratio-btn').forEach(btn => {
@@ -457,19 +486,17 @@ init();
 
 // ─── Draggable subtitle stage ──────────────────────────────────
 const stageWrap = document.getElementById('stage-wrap');
+const dragGrip  = document.getElementById('drag-grip');
 const dragReset = document.getElementById('drag-reset');
 const STAGE_POS_KEY = 'laolao_stage_pos';
 
 let dragging = false, dragStartX = 0, dragStartY = 0, wrapStartX = 0, wrapStartY = 0;
 
 function toFixed() {
-  // Switch from bottom/left/right anchoring to top/left pixel positioning
   const r = stageWrap.getBoundingClientRect();
   stageWrap.style.bottom = '';
-  stageWrap.style.right  = '';
   stageWrap.style.left   = r.left + 'px';
   stageWrap.style.top    = r.top  + 'px';
-  stageWrap.style.width  = r.width + 'px';
 }
 
 function savePos() {
@@ -477,7 +504,6 @@ function savePos() {
   localStorage.setItem(STAGE_POS_KEY, JSON.stringify({
     left: r.left / window.innerWidth,
     top:  r.top  / window.innerHeight,
-    w:    r.width / window.innerWidth,
   }));
   dragReset.classList.add('visible');
 }
@@ -488,33 +514,32 @@ function restorePos() {
   try {
     const p = JSON.parse(raw);
     stageWrap.style.bottom = '';
-    stageWrap.style.right  = '';
     stageWrap.style.left   = (p.left * window.innerWidth)  + 'px';
     stageWrap.style.top    = (p.top  * window.innerHeight) + 'px';
-    stageWrap.style.width  = (p.w    * window.innerWidth)  + 'px';
     dragReset.classList.add('visible');
   } catch {}
 }
 
-stageWrap.addEventListener('pointerdown', e => {
+// Only the grip initiates drag
+dragGrip.addEventListener('pointerdown', e => {
   if (e.target === dragReset) return;
+  e.preventDefault();
   dragging = true;
-  stageWrap.setPointerCapture(e.pointerId);
+  dragGrip.setPointerCapture(e.pointerId);
   stageWrap.classList.add('dragging');
   if (!stageWrap.style.top) toFixed();
-  dragStartX = e.clientX;
-  dragStartY = e.clientY;
+  dragStartX = e.clientX; dragStartY = e.clientY;
   wrapStartX = parseFloat(stageWrap.style.left) || 0;
   wrapStartY = parseFloat(stageWrap.style.top)  || 0;
 });
 
-stageWrap.addEventListener('pointermove', e => {
+dragGrip.addEventListener('pointermove', e => {
   if (!dragging) return;
   stageWrap.style.left = (wrapStartX + e.clientX - dragStartX) + 'px';
   stageWrap.style.top  = (wrapStartY + e.clientY - dragStartY) + 'px';
 });
 
-stageWrap.addEventListener('pointerup', e => {
+dragGrip.addEventListener('pointerup', () => {
   if (!dragging) return;
   dragging = false;
   stageWrap.classList.remove('dragging');
@@ -523,7 +548,10 @@ stageWrap.addEventListener('pointerup', e => {
 
 dragReset.addEventListener('click', e => {
   e.stopPropagation();
-  stageWrap.style.cssText = 'position:fixed;bottom:60px;left:5%;right:5%;z-index:10;cursor:grab;';
+  stageWrap.style.cssText = '';
+  stageWrap.style.position = 'fixed';
+  stageWrap.style.bottom = '60px';
+  stageWrap.style.left = '5%';
   localStorage.removeItem(STAGE_POS_KEY);
   dragReset.classList.remove('visible');
 });
