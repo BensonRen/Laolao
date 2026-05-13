@@ -112,6 +112,34 @@
     .ratio-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
     .ratio-btn.active { border-color: #0a84ff; color: #0a84ff; background: rgba(10,132,255,0.15); }
 
+    /* ── Audio pipeline meter (always visible in toolbar) ── */
+    #pipeline {
+      display: flex; align-items: center; gap: 8px;
+      padding: 0 4px;
+    }
+    #level-bar-wrap {
+      width: 80px; height: 8px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 4px; overflow: hidden;
+    }
+    #level-bar {
+      height: 100%; width: 0%;
+      background: #30d158;
+      border-radius: 4px;
+      transition: width 0.1s, background 0.1s;
+    }
+    #vad-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #444;
+      transition: background 0.15s;
+      flex-shrink: 0;
+    }
+    #vad-dot.speaking { background: #30d158; box-shadow: 0 0 6px #30d158; }
+    #pipeline-label {
+      font-size: 11px; color: #555;
+      min-width: 48px;
+    }
+
     .tb-spacer { flex: 1; }
 
     .tb-btn {
@@ -242,6 +270,13 @@
   <button class="ratio-btn" data-ratio="1:1">1∶1</button>
   <button class="ratio-btn active" data-ratio="free">Full</button>
 
+  <div class="tb-sep"></div>
+  <div id="pipeline">
+    <div id="level-bar-wrap"><div id="level-bar"></div></div>
+    <div id="vad-dot" title="VAD: speech detected"></div>
+    <span id="pipeline-label">no audio</span>
+  </div>
+
   <div class="tb-spacer"></div>
   <button id="debug-toggle" class="tb-btn">Stats</button>
 </div>
@@ -264,6 +299,14 @@
   <div class="row"><span class="label">Last</span><span class="val" id="db-lat-last">–</span></div>
   <div class="row"><span class="label">Avg</span><span class="val" id="db-lat-avg">–</span></div>
   <div class="row"><span class="label">Min / Max</span><span class="val" id="db-lat-minmax">–</span></div>
+
+  <div class="section">Audio Pipeline</div>
+  <div class="row"><span class="label">Mic level (RMS)</span><span class="val" id="db-rms">–</span></div>
+  <div class="row"><span class="label">VAD</span><span class="val" id="db-vad">–</span></div>
+  <div class="row"><span class="label">Buffer</span><span class="val" id="db-buf">–</span></div>
+  <div class="row"><span class="label">Last transcribe</span><span class="val" id="db-last-tx">–</span></div>
+  <div class="row"><span class="label">Last result</span><span class="val" id="db-last-result" style="font-size:10px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">–</span></div>
+  <div id="db-diagnosis" style="margin-top:8px;font-size:11px;color:#ffd60a;line-height:1.5;display:none"></div>
 </div>
 
 <!-- Camera -->
@@ -550,6 +593,79 @@ function fmtLat(ms) {
 
 let wsReconnects = -1;
 
+// ─── Audio pipeline meter ──────────────────────────────────────
+const levelBar      = document.getElementById('level-bar');
+const vadDot        = document.getElementById('vad-dot');
+const pipelineLabel = document.getElementById('pipeline-label');
+const dbDiagnosis   = document.getElementById('db-diagnosis');
+
+let lastLevelTime = 0;
+let silentStreak  = 0;   // consecutive silent-level messages
+let noTxStreak    = 0;   // consecutive messages with no recent transcription
+
+function updateLevel(msg) {
+  lastLevelTime = Date.now();
+  const rms = msg.rms || 0;
+
+  // Level bar: scale rms 0–0.05 → 0–100% (speech is usually 0.01–0.04)
+  const pct = Math.min(100, rms / 0.05 * 100);
+  levelBar.style.width = pct + '%';
+  levelBar.style.background = rms < 0.002 ? '#444' : msg.vad ? '#30d158' : '#ffd60a';
+
+  // VAD dot
+  vadDot.classList.toggle('speaking', !!msg.vad);
+
+  // Toolbar label
+  if (rms < 0.001) {
+    pipelineLabel.textContent = 'no signal';
+    pipelineLabel.style.color = '#ff453a';
+    silentStreak++;
+  } else if (msg.vad) {
+    pipelineLabel.textContent = 'speaking';
+    pipelineLabel.style.color = '#30d158';
+    silentStreak = 0;
+  } else if (msg.in_utterance) {
+    pipelineLabel.textContent = 'buffering…';
+    pipelineLabel.style.color = '#ffd60a';
+    silentStreak = 0;
+  } else {
+    pipelineLabel.textContent = 'listening';
+    pipelineLabel.style.color = '#888';
+    silentStreak = 0;
+  }
+
+  // Debug panel fields
+  setVal('db-rms', rms.toFixed(4), rms < 0.001 ? 'bad' : rms > 0.003 ? 'good' : 'warn');
+  setVal('db-vad', msg.vad ? '● Speaking' : '○ Silent', msg.vad ? 'good' : '');
+  setVal('db-buf', msg.buffer_s != null ? msg.buffer_s + ' s' : '–');
+  if (msg.last_transcribe_ago != null) {
+    const ago = msg.last_transcribe_ago;
+    setVal('db-last-tx', ago + ' s ago', ago > 10 ? 'warn' : 'good');
+    noTxStreak = ago > 10 ? noTxStreak + 1 : 0;
+  } else {
+    setVal('db-last-tx', 'never', 'warn');
+    noTxStreak++;
+  }
+  setVal('db-last-result', msg.last_result || '(empty)');
+
+  // Diagnosis hints
+  const hints = [];
+  if (silentStreak > 8)   hints.push('⚠ Mic level is near zero — check mic permissions or input device selection.');
+  if (rms > 0.002 && !msg.vad && silentStreak === 0)
+                           hints.push('⚠ Audio detected but VAD not triggering — try speaking louder or closer.');
+  if (noTxStreak > 16 && rms > 0.002)
+                           hints.push('⚠ Audio is reaching server but no transcription in 10s — model may be hung.');
+  if (msg.last_result === '' && msg.last_transcribe_ago != null && msg.last_transcribe_ago < 5)
+                           hints.push('ℹ Whisper ran but returned empty — background noise or too short an utterance.');
+
+  if (hints.length) {
+    dbDiagnosis.textContent = hints.join('\n');
+    dbDiagnosis.style.display = 'block';
+  } else {
+    dbDiagnosis.style.display = 'none';
+  }
+}
+
 function updateDebugStats(s) {
   const t = s.transcriptions, l = s.latency_ms;
   setVal('db-backend', s.backend || '–');
@@ -586,6 +702,7 @@ function connect() {
     try { msg = JSON.parse(ev.data); } catch { return; }
 
     if (msg.type === 'stats') { updateDebugStats(msg); return; }
+    if (msg.type === 'level') { updateLevel(msg); return; }
 
     const text = (msg.text || '').trim();
     if (!text) return;
@@ -609,6 +726,16 @@ function connect() {
 }
 
 connect();
+
+// If no level messages for 2s, server audio thread is likely stuck
+setInterval(() => {
+  if (lastLevelTime && Date.now() - lastLevelTime > 2000) {
+    pipelineLabel.textContent = 'no data';
+    pipelineLabel.style.color = '#ff453a';
+    levelBar.style.width = '0%';
+    vadDot.classList.remove('speaking');
+  }
+}, 500);
 </script>
 </body>
 </html>

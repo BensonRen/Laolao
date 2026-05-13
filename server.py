@@ -169,6 +169,9 @@ class UtteranceProcessor:
         self._last_partial_t = 0.0
         self._last_partial_text = ""
         self._last_stats_t = 0.0
+        self._last_level_t = 0.0
+        self._last_transcribe_t: Optional[float] = None
+        self._last_result: str = ""
 
         # Convert Traditional → Simplified for zh/yue; no-op for other langs
         _convert_langs = {"zh", "yue"}
@@ -240,7 +243,23 @@ class UtteranceProcessor:
 
     def feed(self, chunk: np.ndarray) -> None:
         """Process one audio chunk (int16, 16 kHz)."""
+        rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)) / 32767.0)
         is_speech = self._vad.is_speech(chunk)
+
+        # Emit audio level ~8x per second (every 125ms)
+        now = time.monotonic()
+        if now - self._last_level_t >= 0.125:
+            self._last_level_t = now
+            push({
+                "type": "level",
+                "rms": round(rms, 4),
+                "vad": is_speech,
+                "in_utterance": self._in_utterance,
+                "buffer_s": round(len(self._buffer) / self._sr, 2),
+                "last_transcribe_ago": round(now - self._last_transcribe_t, 1)
+                    if self._last_transcribe_t else None,
+                "last_result": self._last_result,
+            })
 
         if is_speech:
             self._silence_count = 0
@@ -257,6 +276,8 @@ class UtteranceProcessor:
                     text = self._backend.transcribe(self._buffer, self._language)
                     lat = (time.perf_counter() - t0) * 1000
                     self._latencies = (self._latencies + [lat])[-50:]
+                    self._last_transcribe_t = time.monotonic()
+                    self._last_result = text[:60] if text else ""
                     if text and text != self._last_partial_text and self._plausible(text, self._buffer):
                         text = self._to_simplified(text)
                         self._last_partial_text = text
@@ -293,6 +314,8 @@ class UtteranceProcessor:
         text = self._backend.transcribe(audio, self._language)
         lat = (time.perf_counter() - t0) * 1000
         self._latencies = (self._latencies + [lat])[-50:]
+        self._last_transcribe_t = time.monotonic()
+        self._last_result = text[:60] if text else ""
 
         if text and self._plausible(text, audio):
             text = self._to_simplified(text)
