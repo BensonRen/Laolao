@@ -133,12 +133,15 @@ class UtteranceProcessor:
     Both are pushed as WebSocket messages:
         {"type": "partial", "text": "…"}   ← yellow in overlay
         {"type": "final",   "text": "…"}   ← white in overlay
+        {"type": "stats",   …}             ← debug panel update
     """
 
     def __init__(self, backend, vad, cfg: dict) -> None:
         self._backend = backend
         self._vad = vad
         self._sr = 16_000
+        self._cfg = cfg
+        self._start_time = time.monotonic()
 
         self._chunk_samples = int(self._sr * cfg["chunk_ms"] / 1000)
         self._rolling_samples = int(self._sr * cfg["rolling_window_s"])
@@ -154,6 +157,7 @@ class UtteranceProcessor:
         self._silence_count = 0
         self._last_partial_t = 0.0
         self._last_partial_text = ""
+        self._last_stats_t = 0.0
 
         # CJK languages run ~4-6 chars/sec; cap at 10 to reject hallucinations.
         # Other languages cap at 20 chars/sec (~4 words/sec).
@@ -161,12 +165,39 @@ class UtteranceProcessor:
         lang_key = (cfg.get("language") or "").lower()
         self._max_chars_per_sec = 10.0 if lang_key in _cjk else 20.0
 
+        # Stats counters
+        self._n_partials = 0
+        self._n_finals = 0
+        self._n_rejected = 0
+        self._latencies: list[float] = []   # ms, capped at last 50
+
     def _plausible(self, text: str, audio: np.ndarray) -> bool:
         """Return False if text is too long for the audio duration (hallucination)."""
         duration_s = len(audio) / self._sr
         if duration_s < 0.1:
             return False
         return len(text) / duration_s <= self._max_chars_per_sec
+
+    def _push_stats(self) -> None:
+        lats = self._latencies
+        push({
+            "type": "stats",
+            "backend": self._backend.name,
+            "model": self._cfg.get("model", "?"),
+            "language": self._cfg.get("language", "auto"),
+            "uptime_s": int(time.monotonic() - self._start_time),
+            "transcriptions": {
+                "partials": self._n_partials,
+                "finals": self._n_finals,
+                "rejected": self._n_rejected,
+            },
+            "latency_ms": {
+                "last":  round(lats[-1], 1) if lats else None,
+                "avg":   round(sum(lats) / len(lats), 1) if lats else None,
+                "min":   round(min(lats), 1) if lats else None,
+                "max":   round(max(lats), 1) if lats else None,
+            },
+        })
 
     def feed(self, chunk: np.ndarray) -> None:
         """Process one audio chunk (int16, 16 kHz)."""
@@ -183,9 +214,13 @@ class UtteranceProcessor:
                 now = time.monotonic()
                 if now - self._last_partial_t >= self._partial_interval:
                     self._last_partial_t = now
+                    t0 = time.perf_counter()
                     text = self._backend.transcribe(self._buffer, self._language)
+                    lat = (time.perf_counter() - t0) * 1000
+                    self._latencies = (self._latencies + [lat])[-50:]
                     if text and text != self._last_partial_text and self._plausible(text, self._buffer):
                         self._last_partial_text = text
+                        self._n_partials += 1
                         push({"type": "partial", "text": text})
                         log.info("~  %s", text)
 
@@ -196,6 +231,12 @@ class UtteranceProcessor:
 
             if self._silence_count >= self._silence_limit:
                 self._flush()
+
+        # Emit stats every 3 seconds
+        now = time.monotonic()
+        if now - self._last_stats_t >= 3.0:
+            self._last_stats_t = now
+            self._push_stats()
 
     def _flush(self) -> None:
         """Finalise current utterance."""
@@ -208,13 +249,20 @@ class UtteranceProcessor:
         self._buffer = np.array([], dtype=np.int16)
         self._vad.reset()
 
+        t0 = time.perf_counter()
         text = self._backend.transcribe(audio, self._language)
+        lat = (time.perf_counter() - t0) * 1000
+        self._latencies = (self._latencies + [lat])[-50:]
+
         if text and self._plausible(text, audio):
+            self._n_finals += 1
             push({"type": "final", "text": text})
             log.info("✓  %s", text)
         elif text:
+            self._n_rejected += 1
             log.warning("⚠ Rejected hallucination (%d chars / %.1fs): %s",
                         len(text), len(audio) / self._sr, text[:60])
+        self._push_stats()
 
 
 # ──────────────────────────────────────────────────────────────

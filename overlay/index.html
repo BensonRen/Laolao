@@ -45,8 +45,9 @@
 
     body.portrait-preview #viewport {
       position: relative;
-      width: min(100vw, calc(100vh * 9 / 16));
-      height: min(100vh, calc(100vw * 16 / 9));
+      /* On a landscape monitor: width is the limiting axis (9/16 of height) */
+      width: min(calc(100vh * 9 / 16), 100vw);
+      height: min(calc(100vw * 16 / 9), 100vh);
       overflow: hidden;
       flex-shrink: 0;
     }
@@ -55,6 +56,18 @@
     body.portrait-preview #picker,
     body.portrait-preview #stage {
       position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    body.portrait-preview #stage {
+      height: auto;
+      top: auto;
+      bottom: 60px;
+      left: 5%;
+      right: 5%;
+      width: auto;
     }
 
     /* ── Camera feed ── */
@@ -161,6 +174,69 @@
       transform: translateY(-8px);
     }
 
+    /* ── Debug panel ── */
+    #hud {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      z-index: 200;
+      display: flex;
+      gap: 6px;
+      pointer-events: all;
+    }
+
+    #hud button {
+      background: rgba(0,0,0,0.55);
+      border: 1px solid rgba(255,255,255,0.18);
+      color: #fff;
+      font-family: 'SF Mono', 'Menlo', monospace;
+      font-size: 12px;
+      padding: 5px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      backdrop-filter: blur(6px);
+    }
+    #hud button:hover { background: rgba(0,0,0,0.8); }
+    #hud button.active { border-color: #0a84ff; color: #0a84ff; }
+
+    #debug-panel {
+      position: fixed;
+      top: 44px;
+      right: 14px;
+      z-index: 200;
+      background: rgba(0,0,0,0.82);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 12px;
+      padding: 14px 18px;
+      font-family: 'SF Mono', 'Menlo', monospace;
+      font-size: 12px;
+      color: #e0e0e0;
+      min-width: 240px;
+      backdrop-filter: blur(10px);
+      line-height: 1.9;
+      pointer-events: all;
+    }
+    #debug-panel.hidden { display: none; }
+
+    #debug-panel .section {
+      color: #888;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-top: 10px;
+      margin-bottom: 2px;
+      border-top: 1px solid rgba(255,255,255,0.07);
+      padding-top: 8px;
+    }
+    #debug-panel .section:first-child { margin-top: 0; border-top: none; padding-top: 0; }
+
+    #debug-panel .row { display: flex; justify-content: space-between; gap: 16px; }
+    #debug-panel .label { color: #888; }
+    #debug-panel .val { color: #fff; font-weight: 600; }
+    #debug-panel .val.good { color: #30d158; }
+    #debug-panel .val.warn { color: #ffd60a; }
+    #debug-panel .val.bad  { color: #ff453a; }
+
     /* ── OBS chroma key mode ── */
     body.chromakey { background: #00ff00; }
     body.chromakey #camera { display: none; }
@@ -171,6 +247,32 @@
   </style>
 </head>
 <body>
+
+<div id="hud">
+  <button id="portrait-toggle">9:16</button>
+  <button id="debug-toggle">Stats</button>
+</div>
+<div id="debug-panel" class="hidden">
+  <div class="section">Connection</div>
+  <div class="row"><span class="label">Status</span><span class="val" id="db-ws-status">–</span></div>
+  <div class="row"><span class="label">Reconnects</span><span class="val" id="db-reconnects">0</span></div>
+
+  <div class="section">Server</div>
+  <div class="row"><span class="label">Backend</span><span class="val" id="db-backend">–</span></div>
+  <div class="row"><span class="label">Model</span><span class="val" id="db-model">–</span></div>
+  <div class="row"><span class="label">Language</span><span class="val" id="db-lang">–</span></div>
+  <div class="row"><span class="label">Uptime</span><span class="val" id="db-uptime">–</span></div>
+
+  <div class="section">Transcriptions</div>
+  <div class="row"><span class="label">Partials</span><span class="val" id="db-partials">0</span></div>
+  <div class="row"><span class="label">Finals</span><span class="val" id="db-finals">0</span></div>
+  <div class="row"><span class="label">Rejected</span><span class="val" id="db-rejected">0</span></div>
+
+  <div class="section">Latency (last 50)</div>
+  <div class="row"><span class="label">Last</span><span class="val" id="db-lat-last">–</span></div>
+  <div class="row"><span class="label">Avg</span><span class="val" id="db-lat-avg">–</span></div>
+  <div class="row"><span class="label">Min / Max</span><span class="val" id="db-lat-minmax">–</span></div>
+</div>
 
 <div id="viewport">
 <video id="camera" autoplay playsinline muted></video>
@@ -317,6 +419,67 @@ function setPartial(text) {
   }
 }
 
+// ─── Portrait toggle ───────────────────────────────────────────
+const portraitBtn = document.getElementById('portrait-toggle');
+const PORTRAIT_KEY = 'laolao_portrait';
+
+function applyPortrait(on) {
+  document.body.classList.toggle('portrait-preview', on);
+  portraitBtn.classList.toggle('active', on);
+  localStorage.setItem(PORTRAIT_KEY, on ? '1' : '');
+}
+
+portraitBtn.addEventListener('click', () => {
+  applyPortrait(!document.body.classList.contains('portrait-preview'));
+});
+
+// Restore saved state (URL param OR localStorage)
+applyPortrait(PORTRAIT || !!localStorage.getItem(PORTRAIT_KEY));
+
+// ─── Debug panel ───────────────────────────────────────────────
+const debugToggle = document.getElementById('debug-toggle');
+const debugPanel  = document.getElementById('debug-panel');
+debugToggle.addEventListener('click', () => debugPanel.classList.toggle('hidden'));
+document.addEventListener('keydown', e => { if (e.key === 'd') debugPanel.classList.toggle('hidden'); });
+
+function $d(id) { return document.getElementById(id); }
+
+function setVal(id, text, cls) {
+  const el = $d(id);
+  el.textContent = text;
+  el.className = 'val' + (cls ? ' ' + cls : '');
+}
+
+function fmtUptime(s) {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h ? `${h}h ${m}m` : m ? `${m}m ${sec}s` : `${sec}s`;
+}
+
+function fmtLat(ms) {
+  if (ms == null) return '–';
+  const cls = ms < 500 ? 'good' : ms < 1500 ? 'warn' : 'bad';
+  return [ms + ' ms', cls];
+}
+
+let wsReconnects = -1; // first connect doesn't count
+
+function updateDebugStats(s) {
+  const t = s.transcriptions;
+  setVal('db-backend', s.backend || '–');
+  setVal('db-model',   s.model   || '–');
+  setVal('db-lang',    s.language || '–');
+  setVal('db-uptime',  fmtUptime(s.uptime_s || 0));
+  setVal('db-partials',  t.partials);
+  setVal('db-finals',    t.finals);
+  setVal('db-rejected',  t.rejected, t.rejected > 0 ? 'warn' : '');
+  const l = s.latency_ms;
+  const [lastTxt, lastCls] = fmtLat(l.last);
+  const [avgTxt,  avgCls]  = fmtLat(l.avg);
+  setVal('db-lat-last',   lastTxt, lastCls);
+  setVal('db-lat-avg',    avgTxt,  avgCls);
+  setVal('db-lat-minmax', l.min != null ? `${l.min} / ${l.max} ms` : '–');
+}
+
 // ─── WebSocket connection with auto-reconnect ──────────────────
 let ws = null;
 let reconnectDelay = 1000;
@@ -325,11 +488,21 @@ function connect() {
   const url = `ws://localhost:${WS_PORT}`;
   ws = new WebSocket(url);
 
-  ws.onopen = () => { reconnectDelay = 1000; };
+  ws.onopen = () => {
+    reconnectDelay = 1000;
+    wsReconnects++;
+    setVal('db-ws-status', '● Connected', 'good');
+    setVal('db-reconnects', wsReconnects);
+  };
 
   ws.onmessage = (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
+
+    if (msg.type === 'stats') {
+      updateDebugStats(msg);
+      return;
+    }
 
     const text = (msg.text || '').trim();
     if (!text) return;
@@ -349,6 +522,7 @@ function connect() {
 
   ws.onclose = () => {
     ws = null;
+    setVal('db-ws-status', '○ Disconnected', 'bad');
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 1.5, 10000);
   };
