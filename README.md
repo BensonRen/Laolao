@@ -282,6 +282,41 @@ Any program can connect to `ws://localhost:8765` and receive or send these messa
 
 ---
 
+## Roadmap
+
+What we'd love to build next, roughly in priority order.
+
+### Drop the OBS dependency
+
+OBS is the biggest setup hurdle for non-technical users. The overlay already composites camera + captions in a single browser window — the only thing OBS provides is a *virtual camera driver* that video call apps can select. Three paths forward:
+
+- **Electron app** *(recommended)* — wraps `overlay/index.html` in an Electron shell, bundles the Python server as a sidecar, and exposes a virtual camera via a native module. Reduces setup to a single double-click. The overlay UI needs no changes.
+- **macOS native helper** — use `ScreenCaptureKit` to capture the Chrome window and push frames into a `CoreMediaIO` virtual camera extension (Apple's official API, macOS 13+). Small Swift binary, no Electron.
+- **ffmpeg loopback** *(quick hack)* — `ffmpeg` window capture piped to `v4l2loopback` (Linux) or the standalone OBS-VirtualCam driver (Windows/Mac). No new code, but fragile.
+
+### Smarter transcription
+
+- **Custom vocabulary** — let users specify family names, place names, or domain terms that Whisper consistently mishears; inject them as initial prompt hints
+- **Local-agreement algorithm** — implement `whisper_streaming`'s rolling-window consensus to reduce mid-word text flicker on long utterances
+- **Confidence filtering** — suppress low-confidence segments rather than showing garbled output
+
+### Two-way captioning
+
+Caption grandma's side of the call too. Requires tapping the call's system audio output (loopback) as a second audio source, running a parallel transcription pipeline, and displaying both speakers' text in distinct colors.
+
+### Grandma-side companion
+
+A simple web page (or phone app) grandma opens on her own device. Captions are relayed over the internet via a lightweight signaling server — the text appears large on her screen independently of the call video, useful when video quality is poor.
+
+### Distribution
+
+- **One-click installer** — bundled Electron or native app with embedded Python runtime; no terminal required
+- **Font size slider** in the toolbar (currently URL-param only)
+- **Settings panel** — persistent config UI instead of hand-editing `config.json`
+- **Auto-update** — check GitHub releases and notify in the toolbar
+
+---
+
 ## Contributing
 
 PRs and issues welcome. The project is intentionally small and readable — `server.py` is the entire backend.
