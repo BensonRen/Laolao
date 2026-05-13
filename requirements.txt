@@ -1,0 +1,16 @@
+# Laolao - Python dependencies
+# Install: pip install -r requirements.txt
+#
+# NOTE: If you have an NVIDIA GPU, install PyTorch with CUDA first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+# Then set "device": "cuda" and "compute_type": "float16" in config.json
+# for 5-10x faster transcription.
+
+faster-whisper>=1.0.0
+sounddevice>=0.4.6
+numpy>=1.24.0
+websockets>=12.0
+
+# Silero-VAD: enables more accurate speech detection using a neural VAD model.
+# Uses the ONNX backend (no PyTorch required); only onnxruntime is needed.
+silero-vad>=5.0

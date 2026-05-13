@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Laolao Captions</title>
+  <style>
+    /* ── Google Fonts (Noto Sans SC) – loaded from URL for online use.
+       OBS browser source works with remote URLs.
+       For fully offline use, download NotoSansSC-Regular.ttf and
+       place it next to index.html, then change the src below. ── */
+    @font-face {
+      font-family: 'NotoSansSC';
+      /* Offline-first: try local file, fall back to nothing (system font) */
+      src: local('Noto Sans SC'),
+           local('NotoSansSC'),
+           local('华文黑体'),
+           local('STHeiti'),
+           local('Microsoft YaHei'),
+           local('微软雅黑');
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --font-size: 72px;
+      --bg: rgba(0, 0, 0, 0.72);
+      --color-final: #ffffff;
+      --color-partial: #ffe066;
+      --padding: 24px 36px;
+      --border-radius: 16px;
+      --max-lines: 3;
+      --fade-ms: 4000;     /* ms before a final line fades out */
+      --transition: 0.25s ease;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: transparent;
+      overflow: hidden;
+    }
+
+    #stage {
+      position: fixed;
+      bottom: 60px;
+      left: 5%;
+      right: 5%;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 12px;
+      pointer-events: none;
+    }
+
+    .line {
+      display: inline-block;
+      max-width: 100%;
+      background: var(--bg);
+      color: var(--color-final);
+      font-family: 'NotoSansSC', 'Noto Sans SC', 'PingFang SC', '华文黑体',
+                   'STHeiti', 'Microsoft YaHei', '微软雅黑',
+                   'Hiragino Sans GB', sans-serif;
+      font-size: var(--font-size);
+      font-weight: 600;
+      line-height: 1.3;
+      letter-spacing: 0.02em;
+      padding: var(--padding);
+      border-radius: var(--border-radius);
+      word-break: break-all;
+      opacity: 1;
+      transition: opacity var(--transition), transform var(--transition);
+      transform: translateY(0);
+    }
+
+    .line.partial {
+      color: var(--color-partial);
+    }
+
+    .line.fading {
+      opacity: 0;
+      transform: translateY(-8px);
+    }
+
+    /* ── OBS chroma key: if user sets bg to green, can key it out ── */
+    body.chromakey {
+      background: #00ff00;
+    }
+    body.chromakey .line {
+      background: transparent;
+      text-shadow: 2px 2px 8px rgba(0,0,0,0.9), -1px -1px 4px rgba(0,0,0,0.9);
+    }
+  </style>
+</head>
+<body>
+
+<div id="stage"></div>
+
+<script>
+// ─── URL parameter overrides ───────────────────────────────────
+// Examples:
+//   index.html?fontsize=96&lang=zh&chromakey=1
+//   index.html?fontsize=56&bg=rgba(0,0,20,0.85)
+//   index.html?port=8766
+
+const params = new URLSearchParams(location.search);
+
+const FONT_SIZE  = params.get('fontsize') || '72';
+const BG_COLOR   = params.get('bg')       || 'rgba(0,0,0,0.72)';
+const WS_PORT    = params.get('port')     || '8765';
+const MAX_LINES  = parseInt(params.get('maxlines') || '3', 10);
+const FADE_MS    = parseInt(params.get('fadems')   || '4000', 10);
+const CHROMA_KEY = params.has('chromakey');
+
+// Apply overrides
+document.documentElement.style.setProperty('--font-size', FONT_SIZE + 'px');
+document.documentElement.style.setProperty('--bg', BG_COLOR);
+document.documentElement.style.setProperty('--fade-ms', FADE_MS + 'ms');
+if (CHROMA_KEY) document.body.classList.add('chromakey');
+
+// ─── State ─────────────────────────────────────────────────────
+const stage = document.getElementById('stage');
+let partialEl = null;
+let finalLines = [];      // array of { el, fadeTimer }
+
+// ─── DOM helpers ───────────────────────────────────────────────
+function createLine(text, isPartial) {
+  const el = document.createElement('div');
+  el.className = 'line' + (isPartial ? ' partial' : '');
+  el.textContent = text;
+  return el;
+}
+
+function addFinalLine(text) {
+  // Clear partial
+  if (partialEl) {
+    stage.removeChild(partialEl);
+    partialEl = null;
+  }
+
+  const el = createLine(text, false);
+  stage.appendChild(el);
+
+  // Trim old lines
+  while (finalLines.length >= MAX_LINES) {
+    const oldest = finalLines.shift();
+    clearTimeout(oldest.fadeTimer);
+    if (oldest.el.parentNode) stage.removeChild(oldest.el);
+  }
+
+  // Schedule fade
+  const fadeTimer = setTimeout(() => fadeLine(el), FADE_MS);
+  finalLines.push({ el, fadeTimer });
+}
+
+function fadeLine(el) {
+  el.classList.add('fading');
+  setTimeout(() => {
+    if (el.parentNode) stage.removeChild(el);
+    finalLines = finalLines.filter(l => l.el !== el);
+  }, 300);
+}
+
+function setPartial(text) {
+  if (!partialEl) {
+    partialEl = createLine(text, true);
+    stage.appendChild(partialEl);
+  } else {
+    partialEl.textContent = text;
+  }
+}
+
+// ─── WebSocket connection with auto-reconnect ──────────────────
+let ws = null;
+let reconnectDelay = 1000;
+
+function connect() {
+  const url = `ws://localhost:${WS_PORT}`;
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    console.log('[laolao] Connected to', url);
+    reconnectDelay = 1000;
+  };
+
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+
+    const text = (msg.text || '').trim();
+    if (!text) return;
+
+    if (msg.type === 'partial') {
+      setPartial(text);
+    } else if (msg.type === 'final') {
+      addFinalLine(text);
+    } else if (msg.type === 'clear') {
+      // Allow server to clear the overlay
+      if (partialEl) { stage.removeChild(partialEl); partialEl = null; }
+      finalLines.forEach(l => { clearTimeout(l.fadeTimer); stage.removeChild(l.el); });
+      finalLines = [];
+    }
+  };
+
+  ws.onerror = (e) => console.warn('[laolao] WS error', e);
+
+  ws.onclose = () => {
+    console.log(`[laolao] Disconnected. Retrying in ${reconnectDelay}ms...`);
+    ws = null;
+    setTimeout(connect, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 1.5, 10000);
+  };
+}
+
+connect();
+</script>
+</body>
+</html>
