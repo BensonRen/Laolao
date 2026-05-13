@@ -117,10 +117,12 @@ async def _ws_handler(ws) -> None:
         async for raw in ws:
             try:
                 cmd = json.loads(raw)
-            except Exception:
-                continue
-            if cmd.get("type") == "set_language" and _processor:
-                _processor.set_language(cmd.get("language", "zh"))
+                if cmd.get("type") == "set_language" and _processor:
+                    _processor.set_language(cmd.get("language", "zh"))
+                    # Broadcast updated stats directly (we're already in the loop)
+                    await _broadcast(_processor.stats_payload())
+            except Exception as e:
+                log.warning("WS command error: %s", e)
     except websockets.ConnectionClosed:
         pass
     finally:
@@ -201,7 +203,6 @@ class UtteranceProcessor:
             self._opencc = None
         self._cfg["language"] = language
         log.info("Language → %s", language)
-        self._push_stats()
 
     def _to_simplified(self, text: str) -> str:
         return self._opencc.convert(text) if self._opencc else text
@@ -213,9 +214,9 @@ class UtteranceProcessor:
             return False
         return len(text) / duration_s <= self._max_chars_per_sec
 
-    def _push_stats(self) -> None:
+    def stats_payload(self) -> dict:
         lats = self._latencies
-        push({
+        return {
             "type": "stats",
             "backend": self._backend.name,
             "model": self._cfg.get("model", "?"),
@@ -232,7 +233,10 @@ class UtteranceProcessor:
                 "min":   round(min(lats), 1) if lats else None,
                 "max":   round(max(lats), 1) if lats else None,
             },
-        })
+        }
+
+    def _push_stats(self) -> None:
+        push(self.stats_payload())
 
     def feed(self, chunk: np.ndarray) -> None:
         """Process one audio chunk (int16, 16 kHz)."""

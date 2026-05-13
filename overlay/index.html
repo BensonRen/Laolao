@@ -159,17 +159,24 @@
     #stage-wrap.dragging { cursor: grabbing; }
 
     #drag-handle {
-      display: flex; align-items: center; justify-content: center;
-      height: 18px; margin-bottom: 4px;
-      opacity: 0;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      height: 22px; margin-bottom: 6px;
+      opacity: 0.25;
       transition: opacity 0.2s;
     }
-    #stage-wrap:hover #drag-handle { opacity: 1; }
+    #stage-wrap:hover #drag-handle { opacity: 0.85; }
     #drag-handle::before {
-      content: '⠿';
-      color: rgba(255,255,255,0.5);
-      font-size: 14px;
-      letter-spacing: 2px;
+      content: '⠿⠿';
+      color: #fff;
+      font-size: 13px;
+      letter-spacing: 3px;
+    }
+    #drag-hint-text {
+      font-family: 'SF Mono', 'Menlo', monospace;
+      font-size: 11px;
+      color: rgba(255,255,255,0.75);
+      letter-spacing: 0.04em;
+      pointer-events: none;
     }
 
     #drag-reset {
@@ -272,7 +279,10 @@
 
 <!-- Draggable subtitle area -->
 <div id="stage-wrap">
-  <div id="drag-handle"><button id="drag-reset">Reset position</button></div>
+  <div id="drag-handle">
+    <span id="drag-hint-text">drag to move</span>
+    <button id="drag-reset">Reset</button>
+  </div>
   <div id="stage"></div>
 </div>
 
