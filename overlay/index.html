@@ -5,13 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Laolao Captions</title>
   <style>
-    /* ── Google Fonts (Noto Sans SC) – loaded from URL for online use.
-       OBS browser source works with remote URLs.
-       For fully offline use, download NotoSansSC-Regular.ttf and
-       place it next to index.html, then change the src below. ── */
     @font-face {
       font-family: 'NotoSansSC';
-      /* Offline-first: try local file, fall back to nothing (system font) */
       src: local('Noto Sans SC'),
            local('NotoSansSC'),
            local('华文黑体'),
@@ -29,18 +24,81 @@
       --color-partial: #ffe066;
       --padding: 24px 36px;
       --border-radius: 16px;
-      --max-lines: 3;
-      --fade-ms: 4000;     /* ms before a final line fades out */
+      --fade-ms: 4000;
       --transition: 0.25s ease;
     }
 
     html, body {
       width: 100%;
       height: 100%;
-      background: transparent;
+      background: #000;
       overflow: hidden;
     }
 
+    /* ── Camera feed ── */
+    #camera {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    /* ── Camera picker UI (shown until camera is selected) ── */
+    #picker {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      background: rgba(0, 0, 0, 0.85);
+      color: #fff;
+      font-family: 'PingFang SC', 'Helvetica Neue', sans-serif;
+      z-index: 100;
+    }
+
+    #picker h1 {
+      font-size: 28px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+    }
+
+    #picker p {
+      font-size: 15px;
+      color: #aaa;
+    }
+
+    #cam-select {
+      font-size: 17px;
+      padding: 10px 18px;
+      border-radius: 10px;
+      border: 1px solid #555;
+      background: #1c1c1e;
+      color: #fff;
+      min-width: 320px;
+      cursor: pointer;
+    }
+
+    #cam-select option { background: #1c1c1e; }
+
+    #start-btn {
+      font-size: 17px;
+      padding: 12px 40px;
+      border-radius: 10px;
+      border: none;
+      background: #0a84ff;
+      color: #fff;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    #start-btn:hover { background: #0071e3; }
+
+    #picker.hidden { display: none; }
+
+    /* ── Caption stage ── */
     #stage {
       position: fixed;
       bottom: 60px;
@@ -51,6 +109,7 @@
       align-items: flex-start;
       gap: 12px;
       pointer-events: none;
+      z-index: 10;
     }
 
     .line {
@@ -73,19 +132,16 @@
       transform: translateY(0);
     }
 
-    .line.partial {
-      color: var(--color-partial);
-    }
+    .line.partial { color: var(--color-partial); }
 
     .line.fading {
       opacity: 0;
       transform: translateY(-8px);
     }
 
-    /* ── OBS chroma key: if user sets bg to green, can key it out ── */
-    body.chromakey {
-      background: #00ff00;
-    }
+    /* ── OBS chroma key mode ── */
+    body.chromakey { background: #00ff00; }
+    body.chromakey #camera { display: none; }
     body.chromakey .line {
       background: transparent;
       text-shadow: 2px 2px 8px rgba(0,0,0,0.9), -1px -1px 4px rgba(0,0,0,0.9);
@@ -94,15 +150,20 @@
 </head>
 <body>
 
+<video id="camera" autoplay playsinline muted></video>
+
+<!-- Camera selection UI -->
+<div id="picker">
+  <h1>老老 Laolao</h1>
+  <p>Select the camera to use for captions</p>
+  <select id="cam-select"><option value="">Loading cameras…</option></select>
+  <button id="start-btn">Start</button>
+</div>
+
 <div id="stage"></div>
 
 <script>
 // ─── URL parameter overrides ───────────────────────────────────
-// Examples:
-//   index.html?fontsize=96&lang=zh&chromakey=1
-//   index.html?fontsize=56&bg=rgba(0,0,20,0.85)
-//   index.html?port=8766
-
 const params = new URLSearchParams(location.search);
 
 const FONT_SIZE  = params.get('fontsize') || '72';
@@ -112,18 +173,84 @@ const MAX_LINES  = parseInt(params.get('maxlines') || '3', 10);
 const FADE_MS    = parseInt(params.get('fadems')   || '4000', 10);
 const CHROMA_KEY = params.has('chromakey');
 
-// Apply overrides
 document.documentElement.style.setProperty('--font-size', FONT_SIZE + 'px');
 document.documentElement.style.setProperty('--bg', BG_COLOR);
 document.documentElement.style.setProperty('--fade-ms', FADE_MS + 'ms');
 if (CHROMA_KEY) document.body.classList.add('chromakey');
 
-// ─── State ─────────────────────────────────────────────────────
+// ─── Camera setup ──────────────────────────────────────────────
+const camVideo   = document.getElementById('camera');
+const picker     = document.getElementById('picker');
+const camSelect  = document.getElementById('cam-select');
+const startBtn   = document.getElementById('start-btn');
+
+const SAVED_CAM_KEY = 'laolao_camera_id';
+
+async function populateCameras() {
+  // Need a temporary stream to prompt permission before enumerateDevices returns labels
+  let tempStream = null;
+  try {
+    tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+  } catch (e) {
+    camSelect.innerHTML = '<option value="">Camera permission denied</option>';
+    return;
+  }
+
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const cameras = devices.filter(d => d.kind === 'videoinput');
+
+  tempStream.getTracks().forEach(t => t.stop());
+
+  camSelect.innerHTML = '';
+  const savedId = localStorage.getItem(SAVED_CAM_KEY);
+
+  cameras.forEach((cam, i) => {
+    const opt = document.createElement('option');
+    opt.value = cam.deviceId;
+    opt.textContent = cam.label || `Camera ${i + 1}`;
+    if (cam.deviceId === savedId) opt.selected = true;
+    camSelect.appendChild(opt);
+  });
+
+  if (!cameras.length) {
+    camSelect.innerHTML = '<option value="">No cameras found</option>';
+  }
+}
+
+async function startCamera(deviceId) {
+  const constraints = {
+    video: deviceId ? { deviceId: { exact: deviceId } } : true,
+    audio: false,
+  };
+  const stream = await navigator.mediaDevices.getUserMedia(constraints);
+  camVideo.srcObject = stream;
+  localStorage.setItem(SAVED_CAM_KEY, deviceId);
+  picker.classList.add('hidden');
+}
+
+startBtn.addEventListener('click', () => {
+  const deviceId = camSelect.value;
+  startCamera(deviceId).catch(err => {
+    alert('Could not start camera: ' + err.message);
+  });
+});
+
+// Auto-start with saved camera if available
+async function init() {
+  await populateCameras();
+  const savedId = localStorage.getItem(SAVED_CAM_KEY);
+  if (savedId && camSelect.querySelector(`option[value="${savedId}"]`)) {
+    startCamera(savedId).catch(() => {});
+  }
+}
+
+init();
+
+// ─── Caption state ─────────────────────────────────────────────
 const stage = document.getElementById('stage');
 let partialEl = null;
-let finalLines = [];      // array of { el, fadeTimer }
+let finalLines = [];
 
-// ─── DOM helpers ───────────────────────────────────────────────
 function createLine(text, isPartial) {
   const el = document.createElement('div');
   el.className = 'line' + (isPartial ? ' partial' : '');
@@ -132,23 +259,17 @@ function createLine(text, isPartial) {
 }
 
 function addFinalLine(text) {
-  // Clear partial
-  if (partialEl) {
-    stage.removeChild(partialEl);
-    partialEl = null;
-  }
+  if (partialEl) { stage.removeChild(partialEl); partialEl = null; }
 
   const el = createLine(text, false);
   stage.appendChild(el);
 
-  // Trim old lines
   while (finalLines.length >= MAX_LINES) {
     const oldest = finalLines.shift();
     clearTimeout(oldest.fadeTimer);
     if (oldest.el.parentNode) stage.removeChild(oldest.el);
   }
 
-  // Schedule fade
   const fadeTimer = setTimeout(() => fadeLine(el), FADE_MS);
   finalLines.push({ el, fadeTimer });
 }
@@ -178,10 +299,7 @@ function connect() {
   const url = `ws://localhost:${WS_PORT}`;
   ws = new WebSocket(url);
 
-  ws.onopen = () => {
-    console.log('[laolao] Connected to', url);
-    reconnectDelay = 1000;
-  };
+  ws.onopen = () => { reconnectDelay = 1000; };
 
   ws.onmessage = (ev) => {
     let msg;
@@ -195,7 +313,6 @@ function connect() {
     } else if (msg.type === 'final') {
       addFinalLine(text);
     } else if (msg.type === 'clear') {
-      // Allow server to clear the overlay
       if (partialEl) { stage.removeChild(partialEl); partialEl = null; }
       finalLines.forEach(l => { clearTimeout(l.fadeTimer); stage.removeChild(l.el); });
       finalLines = [];
@@ -205,7 +322,6 @@ function connect() {
   ws.onerror = (e) => console.warn('[laolao] WS error', e);
 
   ws.onclose = () => {
-    console.log(`[laolao] Disconnected. Retrying in ${reconnectDelay}ms...`);
     ws = null;
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 1.5, 10000);

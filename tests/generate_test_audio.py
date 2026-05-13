@@ -226,15 +226,35 @@ def _run_macos_say(text: str, voice: str, output_path: Path) -> bool:
             return False
         return True
 
-    # Fallback: rename AIFF to output_path (tests will still load it for macOS).
-    # The file won't be a proper WAV but the existence check will pass.
-    aiff_path.rename(output_path)
+    # Fallback: use macOS built-in afconvert (AIFF → 16 kHz mono WAV).
+    if shutil.which("afconvert"):
+        af_result = subprocess.run(
+            [
+                "afconvert",
+                "-f", "WAVE",
+                "-d", "LEI16@16000",
+                "-c", "1",
+                str(aiff_path),
+                str(output_path),
+            ],
+            capture_output=True,
+            check=False,
+        )
+        aiff_path.unlink(missing_ok=True)
+        if af_result.returncode == 0:
+            return True
+        print(
+            f"[generate_test_audio] afconvert failed: {af_result.stderr.decode()}",
+            file=sys.stderr,
+        )
+        return False
+
+    aiff_path.unlink(missing_ok=True)
     print(
-        "[generate_test_audio] ffmpeg not found — saved raw AIFF as .wav "
-        "(install ffmpeg for proper conversion).",
+        "[generate_test_audio] Neither ffmpeg nor afconvert found — cannot convert AIFF to WAV.",
         file=sys.stderr,
     )
-    return True
+    return False
 
 
 # ---------------------------------------------------------------------------
