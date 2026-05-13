@@ -385,39 +385,52 @@ function applyRatio(key) {
   localStorage.setItem(RATIO_KEY, key);
 
   if (!r) {
-    // Full window — just remove any constraints
-    document.body.style.cssText = '';
-    viewport.style.cssText = '';
+    // Full window — remove all constraints
+    document.body.style.background = '#000';
+    document.body.style.display = '';
+    document.body.style.alignItems = '';
+    document.body.style.justifyContent = '';
+    viewport.style.cssText = 'position:fixed;inset:0;';
+    const cam = document.getElementById('camera');
+    cam.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;object-fit:cover;';
     return;
   }
 
-  // Resize the browser window to match the ratio, fit within available screen
+  // ── CSS approach (always works) ──
+  // Constrain viewport to the chosen ratio, centered in the window
+  document.body.style.background = '#111';
+  document.body.style.display = 'flex';
+  document.body.style.alignItems = 'center';
+  document.body.style.justifyContent = 'center';
+
+  viewport.style.position = 'relative';
+  viewport.style.overflow = 'hidden';
+  viewport.style.flexShrink = '0';
+  viewport.style.width  = `min(calc(100vh * ${r.w} / ${r.h}), 100vw)`;
+  viewport.style.height = `min(calc(100vw * ${r.h} / ${r.w}), 100vh)`;
+
+  const cam = document.getElementById('camera');
+  cam.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;';
+
+  // ── window.resizeTo() bonus (works only if window was opened via window.open) ──
   const availW = window.screen.availWidth  - 40;
   const availH = window.screen.availHeight - 40;
   let w, h;
-  if (r.w / r.h <= availW / availH) {
-    // height-constrained
-    h = availH; w = Math.round(h * r.w / r.h);
-  } else {
-    // width-constrained
-    w = availW; h = Math.round(w * r.h / r.w);
-  }
+  if (r.w / r.h <= availW / availH) { h = availH; w = Math.round(h * r.w / r.h); }
+  else                               { w = availW; h = Math.round(w * r.h / r.w); }
   window.resizeTo(w, h);
   window.moveTo(
     Math.round((window.screen.availWidth  - w) / 2),
-    Math.round((window.screen.availHeight - h) / 2)
+    Math.round((window.screen.availHeight - h) / 2),
   );
-
-  // Remove any CSS viewport overrides — window IS the right shape now
-  document.body.style.cssText = '';
-  viewport.style.cssText = '';
 }
 
 document.querySelectorAll('.ratio-btn').forEach(btn => {
   btn.addEventListener('click', () => applyRatio(btn.dataset.ratio));
 });
 
-applyRatio(localStorage.getItem(RATIO_KEY) || 'free');
+// Restore saved ratio after page fully loads so camera element exists
+window.addEventListener('load', () => applyRatio(localStorage.getItem(RATIO_KEY) || 'free'));
 
 // ─── Language selector ─────────────────────────────────────────
 const LANG_KEY    = 'laolao_language';
