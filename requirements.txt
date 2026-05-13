@@ -14,3 +14,6 @@ websockets>=12.0
 # Silero-VAD: enables more accurate speech detection using a neural VAD model.
 # Uses the ONNX backend (no PyTorch required); only onnxruntime is needed.
 silero-vad>=5.0
+
+# Traditional → Simplified Chinese conversion (applied to all zh/yue output)
+opencc-python-reimplemented>=0.1.7

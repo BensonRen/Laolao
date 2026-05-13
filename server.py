@@ -159,6 +159,14 @@ class UtteranceProcessor:
         self._last_partial_text = ""
         self._last_stats_t = 0.0
 
+        # Convert Traditional → Simplified for zh/yue; no-op for other langs
+        _convert_langs = {"zh", "yue"}
+        if (cfg.get("language") or "").lower() in _convert_langs:
+            from opencc import OpenCC
+            self._opencc = OpenCC('t2s')
+        else:
+            self._opencc = None
+
         # CJK languages run ~4-6 chars/sec; cap at 10 to reject hallucinations.
         # Other languages cap at 20 chars/sec (~4 words/sec).
         _cjk = {"zh", "yue", "ja", "ko"}
@@ -170,6 +178,9 @@ class UtteranceProcessor:
         self._n_finals = 0
         self._n_rejected = 0
         self._latencies: list[float] = []   # ms, capped at last 50
+
+    def _to_simplified(self, text: str) -> str:
+        return self._opencc.convert(text) if self._opencc else text
 
     def _plausible(self, text: str, audio: np.ndarray) -> bool:
         """Return False if text is too long for the audio duration (hallucination)."""
@@ -219,6 +230,7 @@ class UtteranceProcessor:
                     lat = (time.perf_counter() - t0) * 1000
                     self._latencies = (self._latencies + [lat])[-50:]
                     if text and text != self._last_partial_text and self._plausible(text, self._buffer):
+                        text = self._to_simplified(text)
                         self._last_partial_text = text
                         self._n_partials += 1
                         push({"type": "partial", "text": text})
@@ -255,6 +267,7 @@ class UtteranceProcessor:
         self._latencies = (self._latencies + [lat])[-50:]
 
         if text and self._plausible(text, audio):
+            text = self._to_simplified(text)
             self._n_finals += 1
             push({"type": "final", "text": text})
             log.info("✓  %s", text)
