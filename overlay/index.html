@@ -586,11 +586,19 @@ function restorePos() {
   if (!raw) return;
   try {
     const p = JSON.parse(raw);
+    const left = p.left * window.innerWidth;
+    const top  = p.top  * window.innerHeight;
+    // Discard clearly off-screen saved positions (from old buggy sessions)
+    if (left < -200 || left > window.innerWidth + 200 ||
+        top  < -200 || top  > window.innerHeight + 200) {
+      localStorage.removeItem(STAGE_POS_KEY);
+      return;
+    }
     stageWrap.style.bottom = 'auto';
-    stageWrap.style.left   = (p.left * window.innerWidth)  + 'px';
-    stageWrap.style.top    = (p.top  * window.innerHeight) + 'px';
+    stageWrap.style.left   = left + 'px';
+    stageWrap.style.top    = top  + 'px';
     dragReset.classList.add('visible');
-  } catch {}
+  } catch { localStorage.removeItem(STAGE_POS_KEY); }
 }
 
 // Only the grip initiates drag
