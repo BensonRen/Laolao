@@ -35,6 +35,28 @@
       overflow: hidden;
     }
 
+    /* Portrait preview mode: constrains to 9:16 centered in the browser tab */
+    body.portrait-preview {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #111;
+    }
+
+    body.portrait-preview #viewport {
+      position: relative;
+      width: min(100vw, calc(100vh * 9 / 16));
+      height: min(100vh, calc(100vw * 16 / 9));
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    body.portrait-preview #camera,
+    body.portrait-preview #picker,
+    body.portrait-preview #stage {
+      position: absolute;
+    }
+
     /* ── Camera feed ── */
     #camera {
       position: fixed;
@@ -150,6 +172,7 @@
 </head>
 <body>
 
+<div id="viewport">
 <video id="camera" autoplay playsinline muted></video>
 
 <!-- Camera selection UI -->
@@ -161,6 +184,7 @@
 </div>
 
 <div id="stage"></div>
+</div><!-- #viewport -->
 
 <script>
 // ─── URL parameter overrides ───────────────────────────────────
@@ -172,11 +196,13 @@ const WS_PORT    = params.get('port')     || '8765';
 const MAX_LINES  = parseInt(params.get('maxlines') || '3', 10);
 const FADE_MS    = parseInt(params.get('fadems')   || '4000', 10);
 const CHROMA_KEY = params.has('chromakey');
+const PORTRAIT   = params.has('portrait');
 
 document.documentElement.style.setProperty('--font-size', FONT_SIZE + 'px');
 document.documentElement.style.setProperty('--bg', BG_COLOR);
 document.documentElement.style.setProperty('--fade-ms', FADE_MS + 'ms');
 if (CHROMA_KEY) document.body.classList.add('chromakey');
+if (PORTRAIT)   document.body.classList.add('portrait-preview');
 
 // ─── Camera setup ──────────────────────────────────────────────
 const camVideo   = document.getElementById('camera');

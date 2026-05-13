@@ -71,10 +71,12 @@ class MLXBackend(BaseBackend):
         # Convert int16 PCM [-32768, 32767] → float32 [-1.0, 1.0]
         audio_f32 = audio.astype(np.float32) / 32768.0
 
+        initial_prompt = "以下是普通话的句子。" if language == "zh" else None
         result = mlx_whisper.transcribe(
             audio_f32,
             path_or_hf_repo=self._hf_repo,
             language=language,
+            initial_prompt=initial_prompt,
             verbose=False,
         )
 

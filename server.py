@@ -155,6 +155,19 @@ class UtteranceProcessor:
         self._last_partial_t = 0.0
         self._last_partial_text = ""
 
+        # CJK languages run ~4-6 chars/sec; cap at 10 to reject hallucinations.
+        # Other languages cap at 20 chars/sec (~4 words/sec).
+        _cjk = {"zh", "yue", "ja", "ko"}
+        lang_key = (cfg.get("language") or "").lower()
+        self._max_chars_per_sec = 10.0 if lang_key in _cjk else 20.0
+
+    def _plausible(self, text: str, audio: np.ndarray) -> bool:
+        """Return False if text is too long for the audio duration (hallucination)."""
+        duration_s = len(audio) / self._sr
+        if duration_s < 0.1:
+            return False
+        return len(text) / duration_s <= self._max_chars_per_sec
+
     def feed(self, chunk: np.ndarray) -> None:
         """Process one audio chunk (int16, 16 kHz)."""
         is_speech = self._vad.is_speech(chunk)
@@ -171,7 +184,7 @@ class UtteranceProcessor:
                 if now - self._last_partial_t >= self._partial_interval:
                     self._last_partial_t = now
                     text = self._backend.transcribe(self._buffer, self._language)
-                    if text and text != self._last_partial_text:
+                    if text and text != self._last_partial_text and self._plausible(text, self._buffer):
                         self._last_partial_text = text
                         push({"type": "partial", "text": text})
                         log.info("~  %s", text)
@@ -191,13 +204,17 @@ class UtteranceProcessor:
         self._last_partial_text = ""
         self._last_partial_t = 0.0
 
-        text = self._backend.transcribe(self._buffer, self._language)
+        audio = self._buffer
         self._buffer = np.array([], dtype=np.int16)
         self._vad.reset()
 
-        if text:
+        text = self._backend.transcribe(audio, self._language)
+        if text and self._plausible(text, audio):
             push({"type": "final", "text": text})
             log.info("✓  %s", text)
+        elif text:
+            log.warning("⚠ Rejected hallucination (%d chars / %.1fs): %s",
+                        len(text), len(audio) / self._sr, text[:60])
 
 
 # ──────────────────────────────────────────────────────────────
