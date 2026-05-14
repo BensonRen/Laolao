@@ -6,7 +6,8 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --mac",
-    "build:win": "electron-builder --win"
+    "build:win": "electron-builder --win",
+    "build:win:dir": "electron-builder --win --target dir"
   },
   "dependencies": {},
   "devDependencies": {
@@ -33,8 +34,18 @@
       { "from": "resources/", "to": "resources/", "filter": ["**/*"] }
     ],
     "win": {
-      "target": "dir",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
       "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Laolao"
     }
   }
 }

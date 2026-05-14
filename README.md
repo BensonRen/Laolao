@@ -148,12 +148,16 @@ setup.bat
 ```cmd
 cd electron
 npm install
-npm run build:win    # → ..\dist\win-unpacked\Laolao.exe
+npm run build:win
 ```
+
+This produces two files in `..\dist\`:
+- **`Laolao Setup 0.1.0.exe`** — NSIS installer with Start Menu shortcut and optional install directory
+- **`Laolao 0.1.0.exe`** — standalone portable executable, no install needed
 
 ### 5. Launch
 
-Double-click `dist\win-unpacked\Laolao.exe`.
+Run the installer, or just double-click the portable `.exe` directly.
 
 On first launch Windows will ask for **microphone access** — click Allow. If the mic access prompt doesn't appear automatically, click the orange **"Open Mic Settings"** banner that appears in the app after ~15 seconds and enable the microphone in Windows Privacy Settings.
 
