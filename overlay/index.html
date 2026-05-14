@@ -839,14 +839,13 @@ const micWarnClose = document.getElementById('mic-warn-close');
 let micWarnTimer  = null;
 let micWarnShown  = false;
 let micWarnDismissed = false;
-let firstLevelSeen = false;
+let hadGoodSignal = false;   // true once rms >= 0.002 is seen
 
 function scheduleMicWarn() {
-  if (micWarnTimer || micWarnDismissed) return;
+  if (micWarnTimer || micWarnShown || micWarnDismissed) return;
   micWarnTimer = setTimeout(() => {
-    // Only fire if still silent
-    if (!micWarnDismissed && silentStreak > 0) showMicWarn();
     micWarnTimer = null;
+    if (!micWarnDismissed && !hadGoodSignal) showMicWarn();
   }, 15000);
 }
 
@@ -863,11 +862,10 @@ function hideMicWarn() {
 
 // Auto-dismiss when mic signal recovers
 function checkMicRecovery(rms) {
-  if (!firstLevelSeen) {
-    firstLevelSeen = true;
-    scheduleMicWarn();
+  if (rms >= 0.002) {
+    hadGoodSignal = true;
+    if (micWarnShown) hideMicWarn();
   }
-  if (rms >= 0.002 && micWarnShown) hideMicWarn();
 }
 
 micWarnBtn.addEventListener('click', async () => {
@@ -984,6 +982,8 @@ function connect() {
     setVal('db-reconnects', wsReconnects);
     // Sync saved language to server on reconnect
     applyLanguage(localStorage.getItem(LANG_KEY) || 'zh', true);
+    // Start mic-warning timer on connect — fires if no audio signal after 15 s
+    scheduleMicWarn();
   };
 
   ws.onmessage = (ev) => {
