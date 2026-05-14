@@ -5,7 +5,10 @@ const fs   = require('fs');
 const net  = require('net');
 
 // ── Paths ──────────────────────────────────────────────────────
-const ROOT      = path.join(__dirname, '..');
+// When packaged as a .app the repo lives at ~/code/Laolao; in dev it's one level up.
+const ROOT      = app.isPackaged
+  ? path.join(app.getPath('home'), 'code', 'Laolao')
+  : path.join(__dirname, '..');
 const VENV_PY   = path.join(ROOT, 'venv', 'bin', 'python');
 const SERVER_PY = path.join(ROOT, 'server.py');
 const VCAM_PY   = path.join(ROOT, 'virtual_cam.py');
