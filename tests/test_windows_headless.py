@@ -1,17 +1,20 @@
 """
 Headless smoke tests for Windows — all runnable over SSH with no GUI required.
-Run with: venv\Scripts\python -m pytest tests/test_windows_headless.py -v
+Run with: venv/Scripts/python -m pytest tests/test_windows_headless.py -v
 
 Covers: imports, audio devices, virtual camera, WebSocket server, transcription pipeline.
+
+Notes:
+  - pyvirtualcam tests require OBS VirtualCam DirectShow filter (OBS <= 27 or standalone plugin).
+    OBS 28+ dropped the DirectShow filter; mark those tests with -m vcam to skip by default.
+  - slow tests download Whisper models on first run.
 """
 
-import importlib
 import json
 import platform
 import socket
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -62,24 +65,38 @@ def test_default_input_device():
 
 # ── 3. Virtual camera ─────────────────────────────────────────────────────────
 
+def _vcam_available():
+    """Return True if pyvirtualcam can actually open a camera on this machine."""
+    try:
+        import pyvirtualcam, numpy as np
+        with pyvirtualcam.Camera(width=320, height=240, fps=10,
+                                  fmt=pyvirtualcam.PixelFormat.RGB):
+            pass
+        return True
+    except Exception:
+        return False
+
+vcam_available = pytest.mark.skipif(
+    not _vcam_available(),
+    reason="No virtual camera driver installed (OBS 28+ dropped the DirectShow filter; "
+           "install the standalone OBS-VirtualCam plugin or Unity Capture)"
+)
+
+@vcam_available
 def test_pyvirtualcam_open():
-    import pyvirtualcam
-    import numpy as np
+    import pyvirtualcam, numpy as np
     with pyvirtualcam.Camera(width=1280, height=720, fps=30,
                               fmt=pyvirtualcam.PixelFormat.RGB) as cam:
         assert cam.device, "Camera device name should not be empty"
-        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-        cam.send(frame)
+        cam.send(np.zeros((720, 1280, 3), dtype=np.uint8))
 
+@vcam_available
 def test_pyvirtualcam_send_frame():
-    import pyvirtualcam
-    import numpy as np
+    import pyvirtualcam, numpy as np
     with pyvirtualcam.Camera(width=1280, height=720, fps=30,
                               fmt=pyvirtualcam.PixelFormat.RGB) as cam:
-        # Send 5 frames — verifies no crash under brief streaming
         for i in range(5):
-            frame = np.full((720, 1280, 3), i * 50, dtype=np.uint8)
-            cam.send(frame)
+            cam.send(np.full((720, 1280, 3), i * 50, dtype=np.uint8))
 
 # ── 4. Faster-whisper backend ─────────────────────────────────────────────────
 
@@ -112,13 +129,13 @@ def test_server_starts_and_binds():
     port = _free_port()
     venv_py = ROOT / ("venv/Scripts/python.exe" if IS_WIN else "venv/bin/python")
     proc = subprocess.Popen(
-        [str(venv_py), str(ROOT / "server.py"), f"--ws-port={port}", "--model=tiny"],
+        [str(venv_py), str(ROOT / "server.py"), f"--port={port}", "--model=tiny"],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
     try:
-        deadline = time.time() + 30
+        deadline = time.time() + 60  # model may need to download on first run
         connected = False
         while time.time() < deadline:
             try:
@@ -140,7 +157,7 @@ def test_server_accepts_websocket():
     port = _free_port()
     venv_py = ROOT / ("venv/Scripts/python.exe" if IS_WIN else "venv/bin/python")
     proc = subprocess.Popen(
-        [str(venv_py), str(ROOT / "server.py"), f"--ws-port={port}", "--model=tiny"],
+        [str(venv_py), str(ROOT / "server.py"), f"--port={port}", "--model=tiny"],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
