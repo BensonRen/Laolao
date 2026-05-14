@@ -17,8 +17,10 @@
     "productName": "Laolao",
     "mac": {
       "category": "public.app-category.utilities",
-      "target": "dmg"
+      "target": "dmg",
+      "icon": "icon.icns"
     },
+    "icon": "icon.icns",
     "directories": {
       "output": "../dist"
     },

@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Warm rounded-square background -->
+  <rect width="1024" height="1024" rx="230" fill="#7B4FA6"/>
+
+  <!-- Hair (white bun on top) -->
+  <ellipse cx="512" cy="295" rx="190" ry="145" fill="#F0EDE8"/>
+  <!-- Hair bun -->
+  <circle cx="512" cy="210" r="88" fill="#E8E4DE"/>
+  <circle cx="512" cy="198" r="66" fill="#F0EDE8"/>
+
+  <!-- Face -->
+  <ellipse cx="512" cy="490" rx="195" ry="210" fill="#F5C9A0"/>
+
+  <!-- Rosy cheeks -->
+  <ellipse cx="365" cy="540" rx="52" ry="36" fill="#F0A090" opacity="0.45"/>
+  <ellipse cx="659" cy="540" rx="52" ry="36" fill="#F0A090" opacity="0.45"/>
+
+  <!-- Eyes (warm brown, gentle) -->
+  <ellipse cx="435" cy="460" rx="28" ry="26" fill="#5C3317"/>
+  <ellipse cx="589" cy="460" rx="28" ry="26" fill="#5C3317"/>
+  <!-- Eye shine -->
+  <circle cx="445" cy="452" r="8" fill="white"/>
+  <circle cx="599" cy="452" r="8" fill="white"/>
+
+  <!-- Glasses -->
+  <!-- Left lens frame -->
+  <rect x="370" y="432" width="120" height="72" rx="20" fill="none" stroke="#A0522D" stroke-width="10"/>
+  <!-- Right lens frame -->
+  <rect x="534" y="432" width="120" height="72" rx="20" fill="none" stroke="#A0522D" stroke-width="10"/>
+  <!-- Bridge -->
+  <line x1="490" y1="468" x2="534" y2="468" stroke="#A0522D" stroke-width="10" stroke-linecap="round"/>
+  <!-- Left arm -->
+  <line x1="370" y1="468" x2="330" y2="458" stroke="#A0522D" stroke-width="10" stroke-linecap="round"/>
+  <!-- Right arm -->
+  <line x1="654" y1="468" x2="694" y2="458" stroke="#A0522D" stroke-width="10" stroke-linecap="round"/>
+
+  <!-- Nose -->
+  <ellipse cx="512" cy="530" rx="18" ry="14" fill="#E8A878" opacity="0.7"/>
+
+  <!-- Warm smile with wrinkle lines -->
+  <path d="M 440 580 Q 512 635 584 580" fill="none" stroke="#C07050" stroke-width="12" stroke-linecap="round"/>
+  <!-- Smile dimples -->
+  <path d="M 442 575 Q 425 590 438 600" fill="none" stroke="#C07050" stroke-width="6" stroke-linecap="round" opacity="0.5"/>
+  <path d="M 582 575 Q 599 590 586 600" fill="none" stroke="#C07050" stroke-width="6" stroke-linecap="round" opacity="0.5"/>
+
+  <!-- Neck -->
+  <rect x="464" y="685" width="96" height="60" rx="10" fill="#F0BC8C"/>
+
+  <!-- Sweater / body (warm knitted look) -->
+  <path d="M 270 840 Q 310 720 440 710 L 512 730 L 584 710 Q 714 720 754 840 Z" fill="#C0669A"/>
+  <!-- Sweater collar detail -->
+  <path d="M 440 710 Q 480 750 512 752 Q 544 750 584 710" fill="none" stroke="#A0508A" stroke-width="8"/>
+  <!-- Knit texture lines -->
+  <path d="M 300 790 Q 400 775 512 780 Q 624 775 724 790" fill="none" stroke="#A0508A" stroke-width="4" opacity="0.5"/>
+  <path d="M 280 820 Q 395 805 512 810 Q 629 805 744 820" fill="none" stroke="#A0508A" stroke-width="4" opacity="0.5"/>
+
+  <!-- Small speech bubble (captions) -->
+  <rect x="640" y="300" width="230" height="100" rx="22" fill="white" opacity="0.92"/>
+  <polygon points="668,400 650,435 700,400" fill="white" opacity="0.92"/>
+  <!-- Caption lines -->
+  <rect x="664" y="326" width="178" height="14" rx="7" fill="#9B6FC0"/>
+  <rect x="664" y="354" width="130" height="14" rx="7" fill="#9B6FC0" opacity="0.6"/>
+  <rect x="664" y="382" width="155" height="14" rx="7" fill="#9B6FC0" opacity="0.4"/>
+</svg>
