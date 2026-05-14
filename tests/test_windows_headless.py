@@ -184,6 +184,7 @@ def test_server_accepts_websocket():
 
 # ── 6. virtual_cam.py TCP frame server ───────────────────────────────────────
 
+@vcam_available
 def test_virtual_cam_tcp_port():
     """virtual_cam.py opens TCP port 8766 and accepts a connection."""
     import struct
