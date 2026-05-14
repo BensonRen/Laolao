@@ -524,10 +524,14 @@ async function populateCameras() {
   tmp.getTracks().forEach(t => t.stop());
   camSelect.innerHTML = '';
   const savedId = localStorage.getItem(SAVED_CAM_KEY);
-  devices.filter(d => d.kind === 'videoinput').forEach((cam, i) => {
+  const VIRTUAL_RE = /virtual|obs|snap camera|mmhmm|camo|droid|ivcam|e2esoftware/i;
+  let physicalIndex = 0;
+  devices.filter(d => d.kind === 'videoinput').forEach((cam) => {
+    const label = cam.label || '';
+    if (VIRTUAL_RE.test(label)) return; // skip virtual cameras
     const opt = document.createElement('option');
     opt.value = cam.deviceId;
-    opt.textContent = cam.label || `Camera ${i + 1}`;
+    opt.textContent = label || `Camera ${++physicalIndex}`;
     if (cam.deviceId === savedId) opt.selected = true;
     camSelect.appendChild(opt);
   });
@@ -551,8 +555,12 @@ startBtn.addEventListener('click', () => {
 async function init() {
   await populateCameras();
   const savedId = localStorage.getItem(SAVED_CAM_KEY);
+  // Only auto-start if the saved camera is in the (filtered) list
   if (savedId && camSelect.querySelector(`option[value="${savedId}"]`)) {
     startCamera(savedId).catch(() => {});
+  } else if (savedId) {
+    // Saved camera was virtual or removed — clear it so user picks again
+    localStorage.removeItem(SAVED_CAM_KEY);
   }
 }
 init();
