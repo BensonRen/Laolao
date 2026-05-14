@@ -610,6 +610,64 @@ async function init() {
 }
 init();
 
+// ─── Mic audio capture → WebSocket stream ─────────────────────
+// Captures mic at 16 kHz and sends raw int16 PCM binary frames to
+// server.py over the existing WebSocket. This lets Windows users grant
+// mic permission to Electron (the visible app) rather than python.exe.
+
+let audioCtx = null;
+let micSource = null;
+let scriptNode = null;
+let micStream  = null;
+
+const TARGET_SR  = 16000;
+const CHUNK_MS   = 300;   // match config.json chunk_ms default
+
+async function startMicStream() {
+  if (audioCtx) return;  // already running
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: {
+      sampleRate: TARGET_SR,
+      channelCount: 1,
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    }, video: false });
+  } catch (e) {
+    console.warn('[laolao] mic getUserMedia failed:', e);
+    return;
+  }
+
+  audioCtx  = new AudioContext({ sampleRate: TARGET_SR });
+  micSource = audioCtx.createMediaStreamSource(micStream);
+
+  // Buffer size: closest power-of-2 to CHUNK_MS at TARGET_SR
+  const bufSize = 4096;  // ~256 ms at 16 kHz
+  scriptNode = audioCtx.createScriptProcessor(bufSize, 1, 1);
+
+  scriptNode.onaudioprocess = (ev) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const f32 = ev.inputBuffer.getChannelData(0);
+    // Convert float32 → int16
+    const i16 = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++) {
+      i16[i] = Math.max(-32768, Math.min(32767, f32[i] * 32767));
+    }
+    ws.send(i16.buffer);
+  };
+
+  micSource.connect(scriptNode);
+  scriptNode.connect(audioCtx.destination);
+  console.log('[laolao] mic stream started →', audioCtx.sampleRate, 'Hz');
+}
+
+function stopMicStream() {
+  if (scriptNode) { scriptNode.disconnect(); scriptNode = null; }
+  if (micSource)  { micSource.disconnect();  micSource = null; }
+  if (audioCtx)   { audioCtx.close();        audioCtx = null; }
+  if (micStream)  { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+}
+
 // ─── Draggable subtitle stage ──────────────────────────────────
 const stageWrap = document.getElementById('stage-wrap');
 const dragGrip  = document.getElementById('drag-grip');
@@ -982,6 +1040,9 @@ function connect() {
     setVal('db-reconnects', wsReconnects);
     // Sync saved language to server on reconnect
     applyLanguage(localStorage.getItem(LANG_KEY) || 'zh', true);
+    // On Windows inside Electron, stream mic audio directly over WebSocket
+    // so python.exe never needs mic permission from the OS.
+    if (window.electronAPI?.platform === 'win32') startMicStream();
     // Start mic-warning timer on connect — fires if no audio signal after 15 s
     scheduleMicWarn();
   };
@@ -1009,6 +1070,7 @@ function connect() {
   ws.onclose = () => {
     ws = null;
     setVal('db-ws-status', '○ Disconnected', 'bad');
+    stopMicStream();
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 1.5, 10000);
   };

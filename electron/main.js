@@ -171,7 +171,10 @@ app.whenReady().then(async () => {
     await systemPreferences.askForMediaAccess('microphone');
   }
 
-  pythonServer = spawnPython(SERVER_PY);
+  // On Windows, Electron streams mic audio over WebSocket so Python never
+  // needs direct mic access (avoids the Windows Store Python sandboxing issue).
+  const serverArgs = IS_WIN ? ['--no-mic'] : [];
+  pythonServer = spawnPython(SERVER_PY, serverArgs);
 
   // Give the WebSocket server a moment to bind before the overlay connects
   await new Promise(r => setTimeout(r, 2000));

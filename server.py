@@ -116,10 +116,15 @@ async def _ws_handler(ws) -> None:
     try:
         async for raw in ws:
             try:
+                # Binary frame = raw PCM int16 audio from Electron renderer
+                if isinstance(raw, bytes):
+                    pcm = np.frombuffer(raw, dtype=np.int16)
+                    feed_electron_audio(pcm)
+                    continue
+
                 cmd = json.loads(raw)
                 if cmd.get("type") == "set_language" and _processor:
                     _processor.set_language(cmd.get("language", "zh"))
-                    # Broadcast updated stats directly (we're already in the loop)
                     await _broadcast(_processor.stats_payload())
             except Exception as e:
                 log.warning("WS command error: %s", e)
@@ -335,6 +340,18 @@ class UtteranceProcessor:
 
 _audio_q: queue.Queue = queue.Queue()
 
+# When Electron streams audio over WebSocket we feed it here directly
+# and skip sounddevice entirely.
+_electron_audio = False
+
+
+def feed_electron_audio(pcm_int16: np.ndarray) -> None:
+    """Called from the WS handler when the overlay sends an audio chunk."""
+    global _electron_audio
+    _electron_audio = True
+    if _processor:
+        _processor.feed(pcm_int16)
+
 
 def _audio_cb(indata: np.ndarray, frames: int, t, status) -> None:
     if status:
@@ -347,14 +364,22 @@ def _audio_loop(processor: UtteranceProcessor,
                 device: Optional[int | str],
                 chunk_samples: int) -> None:
     log.info("Opening microphone (device=%s)…", device)
-    with sd.InputStream(
-        samplerate=16_000,
-        channels=1,
-        dtype="float32",
-        blocksize=chunk_samples,
-        device=device,
-        callback=_audio_cb,
-    ):
+    try:
+        stream = sd.InputStream(
+            samplerate=16_000,
+            channels=1,
+            dtype="float32",
+            blocksize=chunk_samples,
+            device=device,
+            callback=_audio_cb,
+        )
+    except Exception as e:
+        log.error("Could not open microphone: %s", e)
+        log.error("Tip: set mic_device in config.json, or use the Electron app "
+                  "which streams audio directly (no mic permission needed for Python).")
+        return
+
+    with stream:
         log.info("Listening. Speak into your microphone…")
         while _running:
             try:
@@ -450,6 +475,8 @@ def main() -> None:
                         help="Print audio devices and exit")
     parser.add_argument("--benchmark", action="store_true",
                         help="Measure transcription speed and exit")
+    parser.add_argument("--no-mic", action="store_true",
+                        help="Skip sounddevice; expect audio streamed over WebSocket")
     args = parser.parse_args()
 
     if args.list_devices:
@@ -485,12 +512,15 @@ def main() -> None:
     _processor = processor
 
     chunk_samples = int(16_000 * cfg["chunk_ms"] / 1000)
-    audio_thread = threading.Thread(
-        target=_audio_loop,
-        args=(processor, cfg["mic_device"], chunk_samples),
-        daemon=True,
-    )
-    audio_thread.start()
+    if args.no_mic:
+        log.info("--no-mic: skipping sounddevice; waiting for audio over WebSocket…")
+    else:
+        audio_thread = threading.Thread(
+            target=_audio_loop,
+            args=(processor, cfg["mic_device"], chunk_samples),
+            daemon=True,
+        )
+        audio_thread.start()
 
     asyncio.run(_run_server(cfg))
 
