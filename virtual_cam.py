@@ -1,23 +1,23 @@
 """
 virtual_cam.py — receives JPEG frames from Electron via TCP and pushes them
-to the OBS Virtual Camera DAL plugin using the compiled vcam/libvcam.dylib.
+to the OBS Camera Extension using pyvirtualcam (0.15+, arm64 native).
 
-No pyvirtualcam required; the dylib wraps OBSDALMachServer directly.
+The OBS Camera Extension (com.obsproject.obs-studio.mac-camera-extension)
+is what Zoom / FaceTime / WeChat actually enumerate — not the old DAL plugin.
 
 Frame protocol: [4-byte big-endian uint32 length] [JPEG bytes]
 
 Usage: python virtual_cam.py [width] [height] [fps]
 """
 
-import ctypes
 import io
 import logging
-import os
 import socket
 import struct
 import sys
 
 import numpy as np
+import pyvirtualcam
 from PIL import Image
 
 log = logging.getLogger(__name__)
@@ -25,26 +25,17 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s  %(levelname)-7s  %(message)s',
     datefmt='%H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stderr),
+        logging.FileHandler('/tmp/laolao_vcam.log'),
+    ],
 )
 
-HOST    = '127.0.0.1'
-PORT    = 8766
-WIDTH   = int(sys.argv[1]) if len(sys.argv) > 1 else 1280
-HEIGHT  = int(sys.argv[2]) if len(sys.argv) > 2 else 720
-FPS     = int(sys.argv[3]) if len(sys.argv) > 3 else 30
-
-DYLIB   = os.path.join(os.path.dirname(__file__), 'vcam', 'libvcam.dylib')
-
-
-def load_vcam() -> ctypes.CDLL:
-    lib = ctypes.CDLL(DYLIB)
-    lib.vcam_start.argtypes     = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32]
-    lib.vcam_start.restype      = ctypes.c_int
-    lib.vcam_send_frame.argtypes = [ctypes.POINTER(ctypes.c_uint8)]
-    lib.vcam_send_frame.restype  = ctypes.c_int
-    lib.vcam_stop.argtypes      = []
-    lib.vcam_stop.restype       = ctypes.c_void_p
-    return lib
+HOST   = '127.0.0.1'
+PORT   = 8766
+WIDTH  = int(sys.argv[1]) if len(sys.argv) > 1 else 1280
+HEIGHT = int(sys.argv[2]) if len(sys.argv) > 2 else 720
+FPS    = int(sys.argv[3]) if len(sys.argv) > 3 else 30
 
 
 def recv_exact(conn: socket.socket, n: int) -> bytes:
@@ -57,25 +48,19 @@ def recv_exact(conn: socket.socket, n: int) -> bytes:
     return bytes(buf)
 
 
-def jpeg_to_bgra(jpeg: bytes) -> bytes:
-    img = Image.open(io.BytesIO(jpeg)).convert('RGBA').resize((WIDTH, HEIGHT), Image.BILINEAR)
-    # PIL RGBA is R,G,B,A — macOS wants B,G,R,A (BGRA)
-    r, g, b, a = img.split()
-    bgra = Image.merge('RGBA', (b, g, r, a))
-    return bgra.tobytes()
+def jpeg_to_rgb(jpeg: bytes) -> np.ndarray:
+    img = Image.open(io.BytesIO(jpeg)).convert('RGB').resize((WIDTH, HEIGHT), Image.BILINEAR)
+    return np.asarray(img, dtype=np.uint8)
 
 
-def handle(conn: socket.socket, lib: ctypes.CDLL) -> None:
+def handle(conn: socket.socket, cam: pyvirtualcam.Camera) -> None:
     log.info('Electron connected — streaming frames to virtual camera')
     try:
         while True:
             length = struct.unpack('>I', recv_exact(conn, 4))[0]
             jpeg   = recv_exact(conn, length)
-
-            bgra = jpeg_to_bgra(jpeg)
-            ptr  = (ctypes.c_uint8 * len(bgra)).from_buffer_copy(bgra)
-            lib.vcam_send_frame(ptr)
-
+            frame  = jpeg_to_rgb(jpeg)
+            cam.send(frame)
     except (ConnectionError, OSError):
         log.info('Electron disconnected')
     finally:
@@ -83,29 +68,23 @@ def handle(conn: socket.socket, lib: ctypes.CDLL) -> None:
 
 
 def main() -> None:
-    lib = load_vcam()
-    log.info('Loaded %s', DYLIB)
+    log.info('Starting pyvirtualcam %s (%dx%d @ %d fps)', pyvirtualcam.__version__, WIDTH, HEIGHT, FPS)
 
-    rc = lib.vcam_start(WIDTH, HEIGHT, FPS)
-    if rc != 0:
-        log.error('vcam_start failed (rc=%d) — is the OBS DAL plugin installed?', rc)
-        log.error('Expected at: /Library/CoreMediaIO/Plug-Ins/DAL/obs-mac-virtualcam.plugin')
-        sys.exit(1)
-    log.info('Virtual camera ready (%dx%d @ %d fps) — "OBS Virtual Camera" should now appear in call apps', WIDTH, HEIGHT, FPS)
+    with pyvirtualcam.Camera(width=WIDTH, height=HEIGHT, fps=FPS, fmt=pyvirtualcam.PixelFormat.RGB) as cam:
+        log.info('Virtual camera ready — "%s" now appears in Zoom / FaceTime / WeChat', cam.device)
 
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind((HOST, PORT))
-    srv.listen(1)
-    log.info('Frame server listening on %s:%d', HOST, PORT)
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind((HOST, PORT))
+        srv.listen(1)
+        log.info('Frame server listening on %s:%d', HOST, PORT)
 
-    try:
-        while True:
-            conn, addr = srv.accept()
-            handle(conn, lib)
-    finally:
-        lib.vcam_stop()
-        srv.close()
+        try:
+            while True:
+                conn, _ = srv.accept()
+                handle(conn, cam)
+        finally:
+            srv.close()
 
 
 if __name__ == '__main__':

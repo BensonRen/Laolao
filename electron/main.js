@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, session } = require('electron');
+const { app, BrowserWindow, dialog, session, systemPreferences } = require('electron');
 const { spawn, execSync }                      = require('child_process');
 const path = require('path');
 const fs   = require('fs');
@@ -146,6 +146,9 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => {
     cb(['camera', 'microphone', 'media', 'mediaKeySystem'].includes(permission));
   });
+
+  // Trigger macOS microphone permission dialog (packaged app requires this)
+  await systemPreferences.askForMediaAccess('microphone');
 
   pythonServer = spawnPython(SERVER_PY);
 
