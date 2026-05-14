@@ -4,3 +4,8 @@ __pycache__/
 .DS_Store
 ~/.cache/laolao/
 .gstack/
+
+# Electron
+electron/node_modules/
+electron/resources/*.plugin
+dist/

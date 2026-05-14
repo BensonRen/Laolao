@@ -1,0 +1,29 @@
+{
+  "name": "laolao",
+  "version": "0.1.0",
+  "description": "Real-time speech captions for video calls — 老老",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^29.0.0",
+    "electron-builder": "^24.0.0"
+  },
+  "build": {
+    "appId": "com.laolao.app",
+    "productName": "Laolao",
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": "dmg"
+    },
+    "directories": {
+      "output": "../dist"
+    },
+    "extraResources": [
+      { "from": "resources/", "to": "resources/", "filter": ["**/*"] }
+    ]
+  }
+}

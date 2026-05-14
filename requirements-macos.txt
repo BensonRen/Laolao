@@ -12,3 +12,13 @@ websockets>=12.0
 
 # Apple Silicon Neural Engine acceleration (M1/M2/M3/M4 only)
 mlx-whisper>=0.4.0
+
+# Silero-VAD (same as requirements.txt)
+silero-vad>=5.0
+
+# Traditional → Simplified Chinese conversion
+opencc-python-reimplemented>=0.1.7
+
+# Virtual camera output (Electron app only — not needed for plain CLI/OBS mode)
+pyvirtualcam>=0.10.0
+Pillow>=10.0.0

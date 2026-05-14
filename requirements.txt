@@ -17,3 +17,8 @@ silero-vad>=5.0
 
 # Traditional → Simplified Chinese conversion (applied to all zh/yue output)
 opencc-python-reimplemented>=0.1.7
+
+# Virtual camera output (Electron app only — not needed for plain CLI/OBS mode)
+# Requires obs-mac-virtualcam.plugin installed at /Library/CoreMediaIO/Plug-Ins/DAL/
+pyvirtualcam>=0.10.0
+Pillow>=10.0.0
