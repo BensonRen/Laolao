@@ -12,22 +12,25 @@ Usage: python virtual_cam.py [width] [height] [fps]
 
 import io
 import logging
+import os
 import socket
 import struct
 import sys
+import tempfile
 
 import numpy as np
 import pyvirtualcam
 from PIL import Image
 
 log = logging.getLogger(__name__)
+_log_path = os.path.join(tempfile.gettempdir(), 'laolao_vcam.log')
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s  %(levelname)-7s  %(message)s',
     datefmt='%H:%M:%S',
     handlers=[
         logging.StreamHandler(sys.stderr),
-        logging.FileHandler('/tmp/laolao_vcam.log'),
+        logging.FileHandler(_log_path),
     ],
 )
 

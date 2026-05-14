@@ -74,9 +74,18 @@ async function ensurePlugin() {
 
 // ── Python child processes ─────────────────────────────────────
 function spawnPython(script, args = []) {
+  // On Windows, add the OBS bin dir to PATH so obs-virtualcam-module64.dll
+  // can find its dependencies (obs.dll etc.) when pyvirtualcam loads it.
+  const env = { ...process.env };
+  if (IS_WIN) {
+    const obsBin = 'C:\\Program Files\\obs-studio\\bin\\64bit';
+    env.PATH = `${obsBin};${env.PATH || ''}`;
+  }
+
   const proc = spawn(VENV_PY, [script, ...args], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env,
   });
   const tag = path.basename(script, '.py');
   proc.stdout.on('data', d => process.stdout.write(`[${tag}] ${d}`));
