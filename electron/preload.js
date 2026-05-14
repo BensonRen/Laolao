@@ -1,7 +1,6 @@
-const { contextBridge } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
-// Expose a minimal flag so overlay/index.html knows it's running inside Electron.
-// Add IPC channels here as needed.
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  openMicSettings: () => ipcRenderer.invoke('open-mic-settings'),
 });

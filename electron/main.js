@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, session, systemPreferences } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, session, shell, systemPreferences } = require('electron');
 const { spawn, execSync }                      = require('child_process');
 const path = require('path');
 const fs   = require('fs');
@@ -148,6 +148,14 @@ function captureLoop() {
 
   tick();
 }
+
+// ── IPC handlers ──────────────────────────────────────────────
+ipcMain.handle('open-mic-settings', () => {
+  const url = IS_MAC
+    ? 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'
+    : 'ms-settings:privacy-microphone';
+  shell.openExternal(url);
+});
 
 // ── App lifecycle ──────────────────────────────────────────────
 app.whenReady().then(async () => {

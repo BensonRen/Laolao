@@ -147,6 +147,31 @@
     }
     @media (max-width: 400px) { #pipeline-label { display: none; } }
 
+    /* ── Mic permission warning banner ── */
+    #mic-warn {
+      position: absolute; top: 48px; left: 50%; transform: translateX(-50%);
+      z-index: 200;
+      background: rgba(255, 80, 30, 0.92);
+      color: #fff; font-size: 13px; line-height: 1.4;
+      padding: 10px 16px; border-radius: 10px;
+      display: flex; align-items: center; gap: 10px;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.5);
+      max-width: calc(100% - 32px);
+      white-space: nowrap;
+    }
+    #mic-warn.hidden { display: none; }
+    #mic-warn-btn {
+      background: rgba(255,255,255,0.22); border: 1px solid rgba(255,255,255,0.4);
+      color: #fff; font-size: 12px; padding: 4px 10px; border-radius: 6px;
+      cursor: pointer; flex-shrink: 0;
+    }
+    #mic-warn-btn:hover { background: rgba(255,255,255,0.35); }
+    #mic-warn-close {
+      background: none; border: none; color: rgba(255,255,255,0.7);
+      font-size: 16px; cursor: pointer; padding: 0 2px; flex-shrink: 0;
+    }
+    #mic-warn-close:hover { color: #fff; }
+
     .tb-spacer { flex: 1; min-width: 4px; }
 
     .tb-btn {
@@ -337,6 +362,13 @@
   <button id="cam-toggle" class="tb-btn">📷 Camera</button>
   <button id="color-toggle" class="tb-btn">Color</button>
   <button id="debug-toggle" class="tb-btn">Stats</button>
+</div>
+
+<!-- Mic permission warning banner -->
+<div id="mic-warn" class="hidden">
+  🎙 No mic signal detected.
+  <button id="mic-warn-btn">Open Mic Settings</button>
+  <button id="mic-warn-close" title="Dismiss">✕</button>
 </div>
 
 <!-- Color panel -->
@@ -736,6 +768,7 @@ let noTxStreak    = 0;   // consecutive messages with no recent transcription
 function updateLevel(msg) {
   lastLevelTime = Date.now();
   const rms = msg.rms || 0;
+  checkMicRecovery(rms);
 
   // Level bar: scale rms 0–0.05 → 0–100% (speech is usually 0.01–0.04)
   const pct = Math.min(100, rms / 0.05 * 100);
@@ -795,6 +828,60 @@ function updateLevel(msg) {
     dbDiagnosis.style.display = 'none';
   }
 }
+
+// ─── Mic permission warning ────────────────────────────────────
+const micWarn     = document.getElementById('mic-warn');
+const micWarnBtn  = document.getElementById('mic-warn-btn');
+const micWarnClose = document.getElementById('mic-warn-close');
+
+// Show the banner after 15 s of near-zero RMS since first level message.
+// Auto-dismiss when signal recovers; also dismissible by the user.
+let micWarnTimer  = null;
+let micWarnShown  = false;
+let micWarnDismissed = false;
+let firstLevelSeen = false;
+
+function scheduleMicWarn() {
+  if (micWarnTimer || micWarnDismissed) return;
+  micWarnTimer = setTimeout(() => {
+    // Only fire if still silent
+    if (!micWarnDismissed && silentStreak > 0) showMicWarn();
+    micWarnTimer = null;
+  }, 15000);
+}
+
+function showMicWarn() {
+  if (micWarnShown || micWarnDismissed) return;
+  micWarnShown = true;
+  micWarn.classList.remove('hidden');
+}
+
+function hideMicWarn() {
+  micWarnShown = false;
+  micWarn.classList.add('hidden');
+}
+
+// Auto-dismiss when mic signal recovers
+function checkMicRecovery(rms) {
+  if (!firstLevelSeen) {
+    firstLevelSeen = true;
+    scheduleMicWarn();
+  }
+  if (rms >= 0.002 && micWarnShown) hideMicWarn();
+}
+
+micWarnBtn.addEventListener('click', async () => {
+  // Try triggering browser-level mic permission first
+  try { await navigator.mediaDevices.getUserMedia({ audio: true }); } catch {}
+  // Open OS mic settings (Electron only)
+  if (window.electronAPI?.openMicSettings) window.electronAPI.openMicSettings();
+});
+
+micWarnClose.addEventListener('click', () => {
+  micWarnDismissed = true;
+  if (micWarnTimer) { clearTimeout(micWarnTimer); micWarnTimer = null; }
+  hideMicWarn();
+});
 
 function updateDebugStats(s) {
   const t = s.transcriptions, l = s.latency_ms;
