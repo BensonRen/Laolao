@@ -4,32 +4,26 @@ const path = require('path');
 const fs   = require('fs');
 const net  = require('net');
 
+const IS_MAC = process.platform === 'darwin';
+const IS_WIN = process.platform === 'win32';
+
 // ── Paths ──────────────────────────────────────────────────────
-// When packaged as a .app the repo lives at ~/code/Laolao; in dev it's one level up.
-const ROOT      = app.isPackaged
+// When packaged the repo lives at ~/code/Laolao; in dev it's one level up.
+const ROOT    = app.isPackaged
   ? path.join(app.getPath('home'), 'code', 'Laolao')
   : path.join(__dirname, '..');
-const VENV_PY   = path.join(ROOT, 'venv', 'bin', 'python');
+const VENV_PY = IS_WIN
+  ? path.join(ROOT, 'venv', 'Scripts', 'python.exe')
+  : path.join(ROOT, 'venv', 'bin', 'python');
 const SERVER_PY = path.join(ROOT, 'server.py');
 const VCAM_PY   = path.join(ROOT, 'virtual_cam.py');
 const OVERLAY   = path.join(ROOT, 'overlay', 'index.html');
 
+// ── macOS DAL plugin (one-time install, not needed on Windows) ──
 const PLUGIN_NAME = 'obs-mac-virtualcam.plugin';
 const PLUGIN_SRC  = path.join(__dirname, 'resources', PLUGIN_NAME);
 const PLUGIN_DST  = `/Library/CoreMediaIO/Plug-Ins/DAL/${PLUGIN_NAME}`;
 
-// ── Virtual camera config ──────────────────────────────────────
-const VCAM_PORT = 8766;
-const CAM_FPS   = 30;
-const CAM_W     = 1280;
-const CAM_H     = 720;
-
-let mainWindow     = null;
-let pythonServer   = null;
-let virtualCamProc = null;
-let vcSocket       = null;
-
-// ── DAL plugin installation ────────────────────────────────────
 function isPluginInstalled() {
   return fs.existsSync(PLUGIN_DST);
 }
@@ -41,13 +35,13 @@ function installPlugin() {
       `Place ${PLUGIN_NAME} in electron/resources/ — see electron/resources/PLUGIN_README.md`
     );
   }
-  // osascript shows a native macOS "enter password" dialog — no terminal required
   const cmd = `mkdir -p '/Library/CoreMediaIO/Plug-Ins/DAL' && cp -r '${PLUGIN_SRC}' '${PLUGIN_DST}'`;
   const script = `do shell script "${cmd.replace(/"/g, '\\"')}" with administrator privileges`;
   execSync(`osascript -e '${script}'`);
 }
 
 async function ensurePlugin() {
+  if (!IS_MAC) return;       // Windows uses OBS DirectShow — no driver install needed
   if (isPluginInstalled()) return;
 
   const { response } = await dialog.showMessageBox({
@@ -96,6 +90,16 @@ function killAll() {
 }
 
 // ── Frame capture → virtual camera pipeline ────────────────────
+const VCAM_PORT = 8766;
+const CAM_FPS   = 30;
+const CAM_W     = 1280;
+const CAM_H     = 720;
+
+let mainWindow     = null;
+let pythonServer   = null;
+let virtualCamProc = null;
+let vcSocket       = null;
+
 function connectVcSocket() {
   const sock = new net.Socket();
   sock.connect(VCAM_PORT, '127.0.0.1', () => {
@@ -106,7 +110,6 @@ function connectVcSocket() {
   sock.on('error', () => {});
   sock.on('close', () => {
     vcSocket = null;
-    // Reconnect after a short pause (virtual_cam.py may still be starting)
     setTimeout(connectVcSocket, 1000);
   });
 }
@@ -125,7 +128,6 @@ function captureLoop() {
       const img    = await mainWindow.webContents.capturePage();
       const scaled = img.resize({ width: CAM_W, height: CAM_H });
       const jpeg   = scaled.toJPEG(80);
-
       const header = Buffer.allocUnsafe(4);
       header.writeUInt32BE(jpeg.length);
       vcSocket.write(header);
@@ -147,8 +149,10 @@ app.whenReady().then(async () => {
     cb(['camera', 'microphone', 'media', 'mediaKeySystem'].includes(permission));
   });
 
-  // Trigger macOS microphone permission dialog (packaged app requires this)
-  await systemPreferences.askForMediaAccess('microphone');
+  // Trigger macOS microphone permission dialog (packaged app requires this; no-op on Windows)
+  if (IS_MAC && systemPreferences.askForMediaAccess) {
+    await systemPreferences.askForMediaAccess('microphone');
+  }
 
   pythonServer = spawnPython(SERVER_PY);
 
@@ -165,7 +169,6 @@ app.whenReady().then(async () => {
     width: CAM_W,
     height: CAM_H,
     title: '老老 Laolao',
-    // Lock aspect ratio so the virtual camera output stays 16:9
     aspectRatio: CAM_W / CAM_H,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
