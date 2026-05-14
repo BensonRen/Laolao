@@ -79,48 +79,54 @@
     /* ── Top toolbar ── */
     #toolbar {
       position: fixed; top: 0; left: 0; right: 0;
-      display: flex; align-items: center; gap: 8px;
-      padding: 10px 14px;
+      display: flex; align-items: center; gap: 6px;
+      flex-wrap: wrap;
+      padding: 7px 10px;
       background: rgba(0,0,0,0.55);
       backdrop-filter: blur(10px);
       border-bottom: 1px solid rgba(255,255,255,0.08);
       z-index: 200;
       font-family: 'SF Mono', 'Menlo', monospace;
+      overflow: hidden;
     }
 
+    /* Hide decorative labels when the toolbar is narrow */
     .tb-label {
       font-size: 11px; color: #888; letter-spacing: 0.08em;
-      text-transform: uppercase; padding-right: 4px;
+      text-transform: uppercase; padding-right: 2px;
     }
+    @container style(--narrow: 1) { .tb-label { display: none; } }
+    @media (max-width: 540px) { .tb-label { display: none; } }
 
     .tb-select {
-      font-size: 13px; padding: 4px 10px; border-radius: 7px;
+      font-size: 12px; padding: 3px 6px; border-radius: 7px;
       border: 1px solid rgba(255,255,255,0.18);
       background: rgba(255,255,255,0.07); color: #fff;
-      cursor: pointer; outline: none;
+      cursor: pointer; outline: none; max-width: 110px;
     }
     .tb-select option { background: #1c1c1e; }
 
-    .tb-sep { width: 1px; height: 20px; background: rgba(255,255,255,0.12); margin: 0 4px; }
+    .tb-sep { width: 1px; height: 18px; background: rgba(255,255,255,0.12); margin: 0 2px; flex-shrink: 0; }
+    @media (max-width: 480px) { .tb-sep { display: none; } }
 
     .ratio-btn {
-      font-size: 12px; padding: 4px 10px; border-radius: 7px;
+      font-size: 11px; padding: 3px 7px; border-radius: 7px;
       border: 1px solid rgba(255,255,255,0.18);
       background: rgba(255,255,255,0.07); color: #aaa;
-      cursor: pointer; white-space: nowrap;
+      cursor: pointer; white-space: nowrap; flex-shrink: 0;
     }
     .ratio-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
     .ratio-btn.active { border-color: #0a84ff; color: #0a84ff; background: rgba(10,132,255,0.15); }
 
     /* ── Audio pipeline meter (always visible in toolbar) ── */
     #pipeline {
-      display: flex; align-items: center; gap: 8px;
-      padding: 0 4px;
+      display: flex; align-items: center; gap: 6px;
+      padding: 0 2px; flex-shrink: 1; min-width: 0;
     }
     #level-bar-wrap {
-      width: 80px; height: 8px;
+      width: 60px; height: 7px;
       background: rgba(255,255,255,0.1);
-      border-radius: 4px; overflow: hidden;
+      border-radius: 4px; overflow: hidden; flex-shrink: 1; min-width: 30px;
     }
     #level-bar {
       height: 100%; width: 0%;
@@ -137,15 +143,17 @@
     #vad-dot.speaking { background: #30d158; box-shadow: 0 0 6px #30d158; }
     #pipeline-label {
       font-size: 11px; color: #555;
-      min-width: 48px;
+      min-width: 44px; white-space: nowrap;
     }
+    @media (max-width: 400px) { #pipeline-label { display: none; } }
 
-    .tb-spacer { flex: 1; }
+    .tb-spacer { flex: 1; min-width: 4px; }
 
     .tb-btn {
-      font-size: 12px; padding: 4px 12px; border-radius: 7px;
+      font-size: 11px; padding: 3px 9px; border-radius: 7px;
       border: 1px solid rgba(255,255,255,0.18);
       background: rgba(255,255,255,0.07); color: #aaa;
+      white-space: nowrap; flex-shrink: 0;
       cursor: pointer;
     }
     .tb-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
