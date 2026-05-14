@@ -326,6 +326,7 @@
   </div>
 
   <div class="tb-spacer"></div>
+  <button id="cam-toggle" class="tb-btn">📷 Camera</button>
   <button id="color-toggle" class="tb-btn">Color</button>
   <button id="debug-toggle" class="tb-btn">Stats</button>
 </div>
@@ -550,6 +551,10 @@ async function startCamera(deviceId) {
 
 startBtn.addEventListener('click', () => {
   startCamera(camSelect.value).catch(e => alert('Could not start camera: ' + e.message));
+});
+
+document.getElementById('cam-toggle').addEventListener('click', () => {
+  picker.classList.remove('hidden');
 });
 
 async function init() {
