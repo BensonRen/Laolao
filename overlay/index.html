@@ -50,6 +50,7 @@
 
     /* ── Camera ── */
     #camera { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    body.cam-mirror #camera { transform: scaleX(-1); }
 
     /* ── Camera picker ── */
     #picker {
@@ -88,7 +89,22 @@
       z-index: 200;
       font-family: 'SF Mono', 'Menlo', monospace;
       overflow: hidden;
+      transition: transform 0.22s ease;
     }
+    /* Auto-hide mode: toolbar slides up; peeks when hover-edge fires */
+    body.toolbar-hidden #toolbar             { transform: translateY(-105%); }
+    body.toolbar-hidden #toolbar.peek        { transform: translateY(0);     }
+    body.toolbar-hidden #color-panel,
+    body.toolbar-hidden #debug-panel         { display: none; }
+
+    /* Invisible 16px strip at top of window — triggers peek when toolbar is hidden */
+    #toolbar-edge {
+      position: fixed; top: 0; left: 0; right: 0;
+      height: 16px;
+      z-index: 199;
+      pointer-events: none;
+    }
+    body.toolbar-hidden #toolbar-edge { pointer-events: auto; }
 
     /* Hide decorative labels when the toolbar is narrow */
     .tb-label {
@@ -180,9 +196,121 @@
       background: rgba(255,255,255,0.07); color: #aaa;
       white-space: nowrap; flex-shrink: 0;
       cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
     }
     .tb-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
     .tb-btn.active { border-color: #0a84ff; color: #0a84ff; }
+
+    /* ── Colorful, role-coded buttons ──
+       Each action gets a distinct hue so the toolbar reads at a glance. */
+    .tb-btn-cam    { color: #0a84ff; border-color: rgba(10,132,255,0.45);  background: rgba(10,132,255,0.10); }
+    .tb-btn-cam:hover    { background: rgba(10,132,255,0.28);  color: #fff; }
+    .tb-btn-mirror { color: #64d2ff; border-color: rgba(100,210,255,0.45); background: rgba(100,210,255,0.10); }
+    .tb-btn-mirror:hover { background: rgba(100,210,255,0.28); color: #fff; }
+    .tb-btn-mirror.active { background: rgba(100,210,255,0.45); color: #fff; border-color: #64d2ff; }
+    .tb-btn-color  { color: #ff79c6; border-color: rgba(255,121,198,0.45); background: rgba(255,121,198,0.10); }
+    .tb-btn-color:hover  { background: rgba(255,121,198,0.28); color: #fff; }
+    .tb-btn-stats  { color: #30d158; border-color: rgba(48,209,88,0.45);   background: rgba(48,209,88,0.10);  }
+    .tb-btn-stats:hover  { background: rgba(48,209,88,0.28);   color: #fff; }
+    .tb-btn-hide   { color: #ff9f0a; border-color: rgba(255,159,10,0.45);  background: rgba(255,159,10,0.10); }
+    .tb-btn-hide:hover   { background: rgba(255,159,10,0.28);  color: #fff; }
+    .tb-btn-safe   { color: #bf5af2; border-color: rgba(191,90,242,0.45);  background: rgba(191,90,242,0.10); }
+    .tb-btn-safe:hover   { background: rgba(191,90,242,0.28);  color: #fff; }
+    .tb-btn-safe.active  { background: rgba(191,90,242,0.45); color: #fff; border-color: #bf5af2; }
+    .tb-btn-width  { color: #ff9500; border-color: rgba(255,149,0,0.45);   background: rgba(255,149,0,0.10);  }
+    .tb-btn-width:hover  { background: rgba(255,149,0,0.28);   color: #fff; }
+    .tb-btn-width.active { background: rgba(255,149,0,0.45);  color: #fff; border-color: #ff9500;  }
+
+    /* ── Caption max-width popover ── */
+    #width-pop {
+      position: fixed; top: 48px; z-index: 220;
+      background: rgba(0,0,0,0.92);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 12px; padding: 14px 16px;
+      backdrop-filter: blur(10px);
+      font-family: 'SF Mono', 'Menlo', monospace;
+      color: #e0e0e0;
+      box-shadow: 0 6px 22px rgba(0,0,0,0.55);
+      display: flex; flex-direction: column; gap: 10px;
+      min-width: 240px;
+    }
+    #width-pop.hidden { display: none; }
+    #width-pop .wp-row {
+      display: flex; align-items: center; gap: 10px; font-size: 11px; color: #888;
+    }
+    #width-pop input[type=range] {
+      flex: 1; accent-color: #ff9500; cursor: pointer;
+    }
+    #width-pop .wp-val { color: #ff9500; font-size: 12px; min-width: 36px; text-align: right; }
+    #width-pop .wp-presets { display: flex; gap: 6px; flex-wrap: wrap; }
+    #width-pop .wp-preset {
+      font-size: 11px; padding: 4px 10px; border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.06); color: #aaa; cursor: pointer;
+      flex-shrink: 0;
+    }
+    #width-pop .wp-preset:hover { background: rgba(255,149,0,0.25); color: #fff; border-color: rgba(255,149,0,0.6); }
+    #width-pop .wp-preset.active { background: rgba(255,149,0,0.4); color: #fff; border-color: #ff9500; }
+
+    /* ── Phone-safe-zone overlay ── */
+    #safe-overlay {
+      position: absolute; inset: 0;
+      pointer-events: none;
+      z-index: 50;
+      display: none;
+    }
+    #safe-overlay.visible { display: block; }
+    .safe-rect {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      border: 1.5px dashed rgba(255,255,255,0.7);
+      border-radius: 4px;
+    }
+    .safe-rect.phone   { border-color: rgba(100,210,255,0.85); }   /* cyan = phone-fill */
+    .safe-rect.square  { border-color: rgba(255,214,10,0.75); }    /* amber = 1:1 */
+    .safe-label {
+      position: absolute; top: -22px; left: 50%; transform: translateX(-50%);
+      font-family: 'SF Mono', 'Menlo', monospace;
+      font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+      white-space: nowrap; padding: 2px 6px; border-radius: 4px;
+      background: rgba(0,0,0,0.6); color: #fff;
+    }
+    .safe-rect.phone  .safe-label { color: #64d2ff; }
+    .safe-rect.square .safe-label { color: #ffd60a; }
+
+    /* ── Custom ratio popover ── */
+    #ratio-custom-pop {
+      position: fixed; top: 48px; left: 12px; z-index: 220;
+      background: rgba(0,0,0,0.92);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 10px; padding: 10px 12px;
+      backdrop-filter: blur(10px);
+      font-family: 'SF Mono', 'Menlo', monospace;
+      display: flex; align-items: center; gap: 6px;
+      box-shadow: 0 6px 22px rgba(0,0,0,0.55);
+    }
+    #ratio-custom-pop.hidden { display: none; }
+    #ratio-custom-pop input[type=number] {
+      width: 48px; padding: 4px 6px; font-size: 12px;
+      border: 1px solid rgba(255,255,255,0.18); border-radius: 6px;
+      background: rgba(255,255,255,0.07); color: #fff;
+      text-align: center; outline: none;
+      -moz-appearance: textfield;
+    }
+    #ratio-custom-pop input[type=number]::-webkit-inner-spin-button,
+    #ratio-custom-pop input[type=number]::-webkit-outer-spin-button {
+      -webkit-appearance: none; margin: 0;
+    }
+    #ratio-custom-pop .colon  { color: #888; font-size: 14px; }
+    #ratio-custom-pop button {
+      font-size: 11px; padding: 4px 9px; border-radius: 6px;
+      border: 1px solid rgba(10,132,255,0.5);
+      background: rgba(10,132,255,0.18); color: #0a84ff; cursor: pointer;
+    }
+    #ratio-custom-pop button:hover { background: rgba(10,132,255,0.35); color: #fff; }
+    #ratio-custom-pop .err {
+      color: #ff453a; font-size: 10px; padding-left: 4px; min-width: 0;
+    }
 
     /* ── Color panel ── */
     #color-panel {
@@ -305,7 +433,8 @@
     }
 
     .line {
-      display: inline-block; max-width: 100%;
+      display: inline-block;
+      max-width: var(--line-max-width, 100%);
       background: var(--bg); color: var(--color-final);
       font-family: 'NotoSansSC','Noto Sans SC','PingFang SC','华文黑体',
                    'STHeiti','Microsoft YaHei','微软雅黑','Hiragino Sans GB',sans-serif;
@@ -350,6 +479,7 @@
   <button class="ratio-btn" data-ratio="4:3">4∶3</button>
   <button class="ratio-btn" data-ratio="1:1">1∶1</button>
   <button class="ratio-btn active" data-ratio="free">Full</button>
+  <button class="ratio-btn" data-ratio="custom" id="ratio-custom-btn">Custom…</button>
 
   <div class="tb-sep"></div>
   <div id="pipeline">
@@ -359,10 +489,40 @@
   </div>
 
   <div class="tb-spacer"></div>
-  <button id="cam-toggle" class="tb-btn">📷 Camera</button>
-  <button id="color-toggle" class="tb-btn">Color</button>
-  <button id="debug-toggle" class="tb-btn">Stats</button>
+  <button id="cam-toggle"    class="tb-btn tb-btn-cam"    title="Switch camera">📷 Camera</button>
+  <button id="mirror-toggle" class="tb-btn tb-btn-mirror" title="Flip camera horizontally">🪞 Mirror</button>
+  <button id="safe-toggle"   class="tb-btn tb-btn-safe"   title="Show phone-viewer safe zones">📱 Safe</button>
+  <button id="width-toggle"  class="tb-btn tb-btn-width"  title="Caption max width">📐 Width</button>
+  <button id="color-toggle"  class="tb-btn tb-btn-color"  title="Caption colors">🎨 Color</button>
+  <button id="debug-toggle"  class="tb-btn tb-btn-stats"  title="Stats & diagnostics">📊 Stats</button>
+  <button id="hide-toggle"   class="tb-btn tb-btn-hide"   title="Hide toolbar (hover top to show)">▴ Hide</button>
 </div>
+
+<!-- Caption width popover -->
+<div id="width-pop" class="hidden">
+  <div class="wp-row">
+    <span>Max caption width</span>
+    <span class="wp-val" id="wp-val">100%</span>
+  </div>
+  <input type="range" id="wp-slider" min="20" max="100" step="1" value="100">
+  <div class="wp-presets">
+    <button class="wp-preset" data-preset="phone"  data-val="32">📱 Phone (9∶16)</button>
+    <button class="wp-preset" data-preset="square" data-val="56">⬛ Square (1∶1)</button>
+    <button class="wp-preset" data-preset="full"   data-val="100">⬜ Full</button>
+  </div>
+</div>
+
+<!-- Custom ratio popover -->
+<div id="ratio-custom-pop" class="hidden">
+  <input type="number" id="rc-w" min="1" max="30" step="1" value="16" inputmode="numeric">
+  <span class="colon">∶</span>
+  <input type="number" id="rc-h" min="1" max="30" step="1" value="9" inputmode="numeric">
+  <button id="rc-apply">Apply</button>
+  <span class="err" id="rc-err"></span>
+</div>
+
+<!-- Invisible 16px strip at the very top — reveals the toolbar in auto-hide mode -->
+<div id="toolbar-edge"></div>
 
 <!-- Mic permission warning banner -->
 <div id="mic-warn" class="hidden">
@@ -428,6 +588,10 @@
 <!-- Camera -->
 <div id="viewport">
   <video id="camera" autoplay playsinline muted></video>
+  <div id="safe-overlay">
+    <div class="safe-rect square" id="safe-square"><span class="safe-label">1∶1 square</span></div>
+    <div class="safe-rect phone"  id="safe-phone"><span class="safe-label">9∶16 phone</span></div>
+  </div>
   <div id="picker">
     <h1>老老 Laolao</h1>
     <p>Select the camera to use for captions</p>
@@ -467,7 +631,8 @@ document.documentElement.style.setProperty('--fade-ms', FADE_MS + 'ms');
 if (CHROMA_KEY) document.body.classList.add('chromakey');
 
 // ─── Aspect ratio ──────────────────────────────────────────────
-const RATIO_KEY = 'laolao_ratio';
+const RATIO_KEY        = 'laolao_ratio';
+const RATIO_CUSTOM_KEY = 'laolao_ratio_custom';   // e.g. "21:9"
 const RATIOS = {
   '9:16':  { w: 9,  h: 16 },
   '16:9':  { w: 16, h: 9  },
@@ -478,8 +643,16 @@ const RATIOS = {
 
 const viewport = document.getElementById('viewport');
 
+function resolveRatio(key) {
+  if (key === 'custom') {
+    const saved = (localStorage.getItem(RATIO_CUSTOM_KEY) || '16:9').split(':');
+    return { w: +saved[0] || 16, h: +saved[1] || 9 };
+  }
+  return RATIOS[key];
+}
+
 function applyRatio(key) {
-  const r = RATIOS[key];
+  const r = resolveRatio(key);
   document.querySelectorAll('.ratio-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.ratio === key);
   });
@@ -527,11 +700,203 @@ function applyRatio(key) {
 }
 
 document.querySelectorAll('.ratio-btn').forEach(btn => {
-  btn.addEventListener('click', () => applyRatio(btn.dataset.ratio));
+  btn.addEventListener('click', () => {
+    if (btn.dataset.ratio === 'custom') { openCustomRatio(); return; }
+    closeCustomRatio();
+    applyRatio(btn.dataset.ratio);
+    requestAnimationFrame(updateSafeOverlay);
+  });
 });
 
 // Restore saved ratio after page fully loads so camera element exists
-window.addEventListener('load', () => applyRatio(localStorage.getItem(RATIO_KEY) || 'free'));
+window.addEventListener('load', () => {
+  applyRatio(localStorage.getItem(RATIO_KEY) || 'free');
+  requestAnimationFrame(updateSafeOverlay);
+});
+window.addEventListener('resize', () => requestAnimationFrame(updateSafeOverlay));
+
+// ─── Custom ratio popover ──────────────────────────────────────
+const rcPop   = document.getElementById('ratio-custom-pop');
+const rcW     = document.getElementById('rc-w');
+const rcH     = document.getElementById('rc-h');
+const rcApply = document.getElementById('rc-apply');
+const rcErr   = document.getElementById('rc-err');
+
+const RC_MAX = 30;
+const RC_MAX_ASPECT = 3;     // longest side ≤ 3× shorter side
+
+function validateCustom(w, h) {
+  if (!Number.isInteger(w) || !Number.isInteger(h)) return 'integers only';
+  if (w < 1 || h < 1)            return 'must be ≥ 1';
+  if (w > RC_MAX || h > RC_MAX)  return `max ${RC_MAX}`;
+  const long = Math.max(w, h), short = Math.min(w, h);
+  if (long / short > RC_MAX_ASPECT) return `ratio max ${RC_MAX_ASPECT}:1`;
+  return '';
+}
+
+function openCustomRatio() {
+  const saved = (localStorage.getItem(RATIO_CUSTOM_KEY) || '16:9').split(':');
+  rcW.value = saved[0]; rcH.value = saved[1];
+  rcErr.textContent = '';
+  // Position popover under the Custom button
+  const btn = document.getElementById('ratio-custom-btn');
+  const r = btn.getBoundingClientRect();
+  rcPop.style.left = Math.max(8, r.left) + 'px';
+  rcPop.style.top  = (r.bottom + 6) + 'px';
+  rcPop.classList.remove('hidden');
+  rcW.focus(); rcW.select();
+}
+
+function closeCustomRatio() { rcPop.classList.add('hidden'); }
+
+function applyCustomRatio() {
+  const w = parseInt(rcW.value, 10);
+  const h = parseInt(rcH.value, 10);
+  const err = validateCustom(w, h);
+  if (err) { rcErr.textContent = err; return; }
+  rcErr.textContent = '';
+  localStorage.setItem(RATIO_CUSTOM_KEY, `${w}:${h}`);
+  // Update the Custom button label so the chosen ratio is visible
+  document.getElementById('ratio-custom-btn').textContent = `${w}∶${h}`;
+  applyRatio('custom');
+  requestAnimationFrame(updateSafeOverlay);
+  closeCustomRatio();
+}
+
+rcApply.addEventListener('click', applyCustomRatio);
+[rcW, rcH].forEach(inp => {
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  applyCustomRatio();
+    if (e.key === 'Escape') closeCustomRatio();
+  });
+});
+document.addEventListener('mousedown', e => {
+  if (rcPop.classList.contains('hidden')) return;
+  if (rcPop.contains(e.target)) return;
+  if (e.target.id === 'ratio-custom-btn') return;
+  closeCustomRatio();
+});
+
+// Restore the button label if user previously set a custom ratio
+(function initCustomLabel() {
+  const saved = localStorage.getItem(RATIO_CUSTOM_KEY);
+  if (saved) {
+    const [w, h] = saved.split(':');
+    document.getElementById('ratio-custom-btn').textContent = `${w}∶${h}`;
+  }
+})();
+
+// ─── Phone-safe-zone overlay ───────────────────────────────────
+// Shows two reference rectangles over the camera area so the user can
+// frame captions/face inside what phone viewers will actually see:
+//   • 1:1 center square — visible in tile-grid layouts on phone
+//   • 9:16 column       — the strict center column visible when an
+//                         app fills a portrait phone screen with a
+//                         16:9 video feed (crops left/right).
+const SAFE_KEY    = 'laolao_safezone';
+const safeBtn     = document.getElementById('safe-toggle');
+const safeOverlay = document.getElementById('safe-overlay');
+const safeSquare  = document.getElementById('safe-square');
+const safePhone   = document.getElementById('safe-phone');
+
+function updateSafeOverlay() {
+  if (!safeOverlay.classList.contains('visible')) return;
+  // Measure the visible camera area (viewport's content box)
+  const vp = viewport.getBoundingClientRect();
+  const W = vp.width, H = vp.height;
+  if (!W || !H) return;
+
+  // 1:1 square — inscribed in the visible area
+  const sq = Math.min(W, H);
+  safeSquare.style.width  = sq + 'px';
+  safeSquare.style.height = sq + 'px';
+
+  // 9:16 phone-fill zone — only meaningful when the visible frame is
+  // wider than 9:16. Width = H × 9/16 (the column a phone screen sees
+  // when an app does aspect-fill on a 16:9 source).
+  const pw = H * 9 / 16;
+  if (pw < W - 1) {
+    safePhone.style.display = 'block';
+    safePhone.style.width  = pw + 'px';
+    safePhone.style.height = H  + 'px';
+  } else {
+    safePhone.style.display = 'none';
+  }
+}
+
+function setSafeZone(on) {
+  safeOverlay.classList.toggle('visible', on);
+  safeBtn.classList.toggle('active', on);
+  localStorage.setItem(SAFE_KEY, on ? '1' : '0');
+  if (on) requestAnimationFrame(updateSafeOverlay);
+}
+
+safeBtn.addEventListener('click', () => {
+  setSafeZone(!safeOverlay.classList.contains('visible'));
+});
+
+setSafeZone(localStorage.getItem(SAFE_KEY) === '1');
+
+// ─── Caption max-width control ─────────────────────────────────
+// User-facing percentage is "fraction of the visible camera viewport
+// the captions are allowed to occupy". We store it as a number 20–100.
+// Computed pixel width is set on a CSS var so .line { max-width: var(...) }
+// kicks in automatically and wraps the long text.
+const WIDTH_KEY  = 'laolao_caption_width_pct';
+const widthBtn   = document.getElementById('width-toggle');
+const widthPop   = document.getElementById('width-pop');
+const wpSlider   = document.getElementById('wp-slider');
+const wpVal      = document.getElementById('wp-val');
+const wpPresets  = document.querySelectorAll('.wp-preset');
+
+function applyCaptionWidth(pct) {
+  pct = Math.max(20, Math.min(100, parseInt(pct, 10) || 100));
+  const vp = viewport.getBoundingClientRect();
+  const w  = Math.round(vp.width * pct / 100);
+  document.documentElement.style.setProperty('--line-max-width', w + 'px');
+  wpVal.textContent = pct + '%';
+  wpSlider.value = pct;
+  wpPresets.forEach(b => b.classList.toggle('active', +b.dataset.val === pct));
+  // Activate the toolbar button when constrained below 100%
+  widthBtn.classList.toggle('active', pct < 100);
+  localStorage.setItem(WIDTH_KEY, pct);
+}
+
+widthBtn.addEventListener('click', () => {
+  const hidden = widthPop.classList.contains('hidden');
+  if (hidden) {
+    const r = widthBtn.getBoundingClientRect();
+    // Right-align under the button, kept on-screen
+    widthPop.style.left = Math.max(8, r.right - 260) + 'px';
+    widthPop.style.top  = (r.bottom + 6) + 'px';
+    widthPop.classList.remove('hidden');
+  } else {
+    widthPop.classList.add('hidden');
+  }
+});
+
+wpSlider.addEventListener('input', () => applyCaptionWidth(wpSlider.value));
+wpPresets.forEach(b => b.addEventListener('click', () => applyCaptionWidth(b.dataset.val)));
+
+document.addEventListener('mousedown', e => {
+  if (widthPop.classList.contains('hidden')) return;
+  if (widthPop.contains(e.target) || e.target === widthBtn) return;
+  widthPop.classList.add('hidden');
+});
+
+// Re-derive pixel width on every layout change (window resize, ratio swap)
+window.addEventListener('resize', () => {
+  applyCaptionWidth(localStorage.getItem(WIDTH_KEY) || '100');
+});
+// Re-apply after applyRatio updates the viewport
+const _origApplyRatio = applyRatio;
+applyRatio = function(key) {
+  _origApplyRatio(key);
+  requestAnimationFrame(() => applyCaptionWidth(localStorage.getItem(WIDTH_KEY) || '100'));
+};
+
+// Restore on load
+applyCaptionWidth(localStorage.getItem(WIDTH_KEY) || '100');
 
 // ─── Language selector ─────────────────────────────────────────
 const LANG_KEY    = 'laolao_language';
@@ -596,6 +961,64 @@ startBtn.addEventListener('click', () => {
 document.getElementById('cam-toggle').addEventListener('click', () => {
   picker.classList.remove('hidden');
 });
+
+// ─── Camera mirror flip ────────────────────────────────────────
+const MIRROR_KEY = 'laolao_camera_mirror';
+const mirrorBtn  = document.getElementById('mirror-toggle');
+
+function applyMirror(on) {
+  document.body.classList.toggle('cam-mirror', on);
+  mirrorBtn.classList.toggle('active', on);
+  localStorage.setItem(MIRROR_KEY, on ? '1' : '0');
+}
+
+mirrorBtn.addEventListener('click', () => {
+  applyMirror(!document.body.classList.contains('cam-mirror'));
+});
+
+// Default: mirrored (matches what most people expect when looking at themselves)
+applyMirror(localStorage.getItem(MIRROR_KEY) !== '0');
+
+// ─── Toolbar auto-hide (macOS menu-bar style) ──────────────────
+const HIDE_KEY     = 'laolao_toolbar_hidden';
+const hideBtn      = document.getElementById('hide-toggle');
+const toolbarEl    = document.getElementById('toolbar');
+const toolbarEdge  = document.getElementById('toolbar-edge');
+let   peekTimer    = null;
+
+function setToolbarHidden(hidden) {
+  document.body.classList.toggle('toolbar-hidden', hidden);
+  toolbarEl.classList.remove('peek');
+  hideBtn.textContent = hidden ? '▾ Show' : '▴ Hide';
+  hideBtn.title = hidden
+    ? 'Pin toolbar (hover top to peek)'
+    : 'Hide toolbar (hover top to show)';
+  localStorage.setItem(HIDE_KEY, hidden ? '1' : '0');
+}
+
+hideBtn.addEventListener('click', () => {
+  setToolbarHidden(!document.body.classList.contains('toolbar-hidden'));
+});
+
+// Peek-on-hover: only when toolbar is in hidden mode
+toolbarEdge.addEventListener('mouseenter', () => {
+  if (!document.body.classList.contains('toolbar-hidden')) return;
+  clearTimeout(peekTimer);
+  toolbarEl.classList.add('peek');
+});
+
+toolbarEl.addEventListener('mouseenter', () => {
+  clearTimeout(peekTimer);
+});
+
+toolbarEl.addEventListener('mouseleave', () => {
+  if (!document.body.classList.contains('toolbar-hidden')) return;
+  clearTimeout(peekTimer);
+  peekTimer = setTimeout(() => toolbarEl.classList.remove('peek'), 350);
+});
+
+// Restore on load
+setToolbarHidden(localStorage.getItem(HIDE_KEY) === '1');
 
 async function init() {
   await populateCameras();
