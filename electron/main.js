@@ -20,8 +20,11 @@ const VCAM_PY   = path.join(ROOT, 'virtual_cam.py');
 const OVERLAY   = path.join(ROOT, 'overlay', 'index.html');
 
 // ── macOS DAL plugin (one-time install, not needed on Windows) ──
+// When packaged, extraResources lands in process.resourcesPath, not __dirname
+// (which resolves inside app.asar).
 const PLUGIN_NAME = 'obs-mac-virtualcam.plugin';
-const PLUGIN_SRC  = path.join(__dirname, 'resources', PLUGIN_NAME);
+const RES_ROOT    = app.isPackaged ? process.resourcesPath : __dirname;
+const PLUGIN_SRC  = path.join(RES_ROOT, 'resources', PLUGIN_NAME);
 const PLUGIN_DST  = `/Library/CoreMediaIO/Plug-Ins/DAL/${PLUGIN_NAME}`;
 
 function isPluginInstalled() {
