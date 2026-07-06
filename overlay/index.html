@@ -790,6 +790,15 @@ if (IS_OUTPUT)  document.body.classList.add('output-mode');
 const IS_ELECTRON_CONTROL = !!window.electronAPI && !IS_OUTPUT;
 if (IS_ELECTRON_CONTROL) document.body.classList.add('electron-control');
 
+// Camera-pipeline diagnostics → shared debug log (via main). Every line is
+// tagged with the window role so OUTPUT (camera owner) and CONTROL (preview)
+// can be told apart in ~/laolao-camera-debug.log.
+const DIAG_ROLE = IS_OUTPUT ? 'OUTPUT ' : 'CONTROL';
+function diagLog(msg) {
+  try { window.electronAPI?.diag?.(`[${DIAG_ROLE}] ${msg}`); } catch {}
+}
+diagLog('overlay loaded');
+
 // Settings writes go through these so the output window never writes (its
 // stale copies would fight the control window via storage events).
 const _ls = window.localStorage;
@@ -1216,17 +1225,41 @@ async function populateCameras() {
 }
 
 async function startCamera(deviceId) {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    // Cap at 720p: the output frame is 720p anyway, and both windows open
-    // this camera. Letting a 4K webcam negotiate full resolution twice can
-    // exceed USB bandwidth — the losing stream then delivers black frames.
-    video: {
-      ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
-      width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 },
-    },
-    audio: false,
+  diagLog(`startCamera: requesting device=${deviceId ? deviceId.slice(0, 8) + '…' : '(default)'}`);
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      // Cap at 720p: the output frame is 720p anyway, and both windows open
+      // this camera. Letting a 4K webcam negotiate full resolution twice can
+      // exceed USB bandwidth — the losing stream then delivers black frames.
+      video: {
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+        width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 },
+      },
+      audio: false,
+    });
+  } catch (e) {
+    diagLog(`startCamera: getUserMedia FAILED ${e.name}: ${e.message}`);
+    throw e;
+  }
+  const tr = stream.getVideoTracks()[0];
+  const s  = tr ? tr.getSettings() : {};
+  diagLog(`startCamera: got stream label="${tr && tr.label}" `
+    + `${s.width}x${s.height}@${s.frameRate} state=${tr && tr.readyState}`);
+  // A track that mutes shortly after opening is delivering no frames — the
+  // EMEET-vs-Chromium wedge. Treat a mute that persists >1.5s as failure.
+  tr && tr.addEventListener('mute', () => {
+    diagLog('track MUTED (no frames)');
+    setTimeout(() => {
+      if (camVideo.srcObject === stream && tr.muted) {
+        restartCamera(deviceId, 'track muted — no frames');
+      }
+    }, 1500);
   });
+  tr && tr.addEventListener('unmute', () => diagLog('track unmuted (frames flowing)'));
   camVideo.srcObject = stream;
+  camVideo.addEventListener('playing', () => diagLog(
+    `video playing ${camVideo.videoWidth}x${camVideo.videoHeight}`), { once: true });
   store(SAVED_CAM_KEY, deviceId);
   picker.classList.add('hidden');
   watchCamera(deviceId, stream);
@@ -1241,7 +1274,11 @@ async function startCamera(deviceId) {
 // pure black, tear the stream down and reopen it (bounded retries).
 let camWatchTimers = [];
 let camRestarts    = 0;
-const CAM_RESTART_MAX = 3;
+// One gentle retry only. Hammering a UVC camera that returns a live-but-empty
+// track (EMEET C950 does this to Chromium) keeps it wedged — the churn is the
+// problem, not the cure. After this we hand control to the user (pick another
+// camera / replug), which recovers reliably.
+const CAM_RESTART_MAX = 1;
 
 function frameIsPureBlack() {
   if (!camVideo.videoWidth) return false;   // no frame decoded yet — not proof
@@ -1274,10 +1311,12 @@ function restartCamera(deviceId, why) {
     return;
   }
   camRestarts++;
-  console.warn(`[laolao] camera ${why} — restarting stream (attempt ${camRestarts}/${CAM_RESTART_MAX})`);
+  diagLog(`restartCamera: ${why} (attempt ${camRestarts}/${CAM_RESTART_MAX})`);
   const s = camVideo.srcObject;
   if (s) { s.getTracks().forEach(t => t.stop()); camVideo.srcObject = null; }
-  setTimeout(() => startCamera(deviceId).catch(() => {}), 800);
+  // Longer pause so the device fully releases before we reopen — a fast
+  // reopen is what wedges it.
+  setTimeout(() => startCamera(deviceId).catch(() => {}), 1500);
 }
 
 function watchCamera(deviceId, stream) {
@@ -1286,9 +1325,12 @@ function watchCamera(deviceId, stream) {
     if (camVideo.srcObject !== stream) return;
     // videoWidth 0 this long after start = the device never delivered a
     // frame (fully wedged); pure black = frames arriving but dead sensor.
+    const black = camVideo.videoWidth ? frameIsPureBlack() : null;
+    diagLog(`watchdog @${ms}ms: videoW=${camVideo.videoWidth} `
+      + `videoH=${camVideo.videoHeight} black=${black} restarts=${camRestarts}`);
     if (camVideo.videoWidth === 0) {
       restartCamera(deviceId, 'delivered no frames');
-    } else if (frameIsPureBlack()) {
+    } else if (black) {
       restartCamera(deviceId, 'delivering pure-black frames');
     } else {
       camRestarts = 0;   // healthy frame seen — future wedges get fresh retries
@@ -1445,13 +1487,18 @@ if (!IS_OUTPUT && !localStorage.getItem(ONBOARD_KEY)) showOnboard();
 // "no camera chosen yet" case, resolved later via storage events.
 let outputCamRetry = null;
 function outputStartCamera() {
-  if (camVideo.srcObject) return;
+  if (camVideo.srcObject) { diagLog('outputStartCamera: already have a stream'); return; }
   clearTimeout(outputCamRetry);
   const savedId = localStorage.getItem(SAVED_CAM_KEY);
   // Never fall back to `video: true` here — the default device could be the
   // OBS Virtual Camera itself (feedback loop). Wait for an explicit choice.
-  if (!savedId) return;
+  if (!savedId) {
+    diagLog('outputStartCamera: NO saved camera id — waiting for the control window to pick one');
+    return;
+  }
+  diagLog(`outputStartCamera: starting saved camera ${savedId.slice(0, 8)}…`);
   startCamera(savedId).catch(() => {
+    diagLog('outputStartCamera: start failed, retrying in 5s');
     outputCamRetry = setTimeout(outputStartCamera, 5000);
   });
 }
@@ -1990,19 +2037,28 @@ if (IS_ELECTRON_CONTROL) {
   let prevUrl       = null;
   let lastFrameT    = 0;
 
+  let frameRxCount = 0;
   window.electronAPI.onOutputFrame(buf => {
     lastFrameT = Date.now();
+    frameRxCount++;
+    if (frameRxCount === 1) diagLog(`preview: first output frame received (${buf.byteLength || buf.length} bytes)`);
+    if (frameRxCount % 150 === 0) diagLog(`preview: ${frameRxCount} output frames received`);
     const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
     const old = prevUrl;
     prevUrl = url;
     previewEl.onload = () => { if (old) URL.revokeObjectURL(old); };
+    previewEl.onerror = () => diagLog('preview: img decode ERROR');
     previewEl.src = url;
   });
 
   // Surface a dead output pipeline instead of freezing on the last frame.
+  let waitingLogged = false;
   setInterval(() => {
-    previewWait.classList.toggle(
-      'visible', !lastFrameT || Date.now() - lastFrameT > 3000);
+    const stale = !lastFrameT || Date.now() - lastFrameT > 3000;
+    previewWait.classList.toggle('visible', stale);
+    if (stale && !waitingLogged) { waitingLogged = true; diagLog(
+      `preview: STALE — no output frames for >3s (received ${frameRxCount} total)`); }
+    if (!stale) waitingLogged = false;
   }, 1000);
 
   // Output window gave up on the camera — ask the user to pick another.

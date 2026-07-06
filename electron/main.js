@@ -97,6 +97,35 @@ async function ensureRoot() {
   }
 }
 
+// ── Camera-pipeline diagnostics ────────────────────────────────
+// Everything about the camera path — output-window getUserMedia, capturePage
+// sizes, black-frame detection, IPC frames to the control window, and the
+// renderer's own diag lines — is timestamped into one file so a "black on
+// open" report can be traced end to end. Truncated fresh each launch.
+const DEBUG_LOG = path.join(app.getPath('home'), 'laolao-camera-debug.log');
+try { fs.writeFileSync(DEBUG_LOG, ''); } catch {}
+
+function diag(line) {
+  const stamp = new Date().toISOString().slice(11, 23);
+  const msg = `${stamp}  ${line}\n`;
+  try { fs.appendFileSync(DEBUG_LOG, msg); } catch {}
+  process.stderr.write(`[diag] ${msg}`);
+}
+
+// True if a nativeImage is (near) pure black — sample the BGRA bitmap sparsely.
+function imageIsBlack(img) {
+  try {
+    const buf = img.getBitmap();           // BGRA, 4 bytes/pixel
+    if (!buf || !buf.length) return true;
+    let checked = 0, lit = 0;
+    for (let i = 0; i < buf.length; i += 4 * 997) {   // sparse stride, prime
+      checked++;
+      if (buf[i] > 8 || buf[i + 1] > 8 || buf[i + 2] > 8) lit++;
+    }
+    return checked > 0 && lit === 0;
+  } catch { return false; }
+}
+
 // ── Ports & camera geometry ────────────────────────────────────
 const WS_PORT   = 8765;
 const VCAM_PORT = 8766;
@@ -395,19 +424,30 @@ function connectVcSocket() {
 // output window loads — the preview must work even before/without the vcam.
 let captureRunning = false;
 let frameCount     = 0;
+let capturedEver   = false;
+let litEver        = false;
 function captureLoop() {
-  if (captureRunning) return;
+  if (captureRunning) { diag('captureLoop: already running, skip'); return; }
   captureRunning = true;
+  diag('captureLoop: started');
 
   async function tick() {
     if (!outputWindow || outputWindow.isDestroyed()) {
       captureRunning = false;
+      diag('captureLoop: output window gone, stopping');
       return;
     }
     try {
       const img  = await outputWindow.webContents.capturePage();
       const size = img.getSize();
       const targetAspect = CAM_W / CAM_H;
+      if (!capturedEver) {
+        capturedEver = true;
+        diag(`capturePage: first frame ${size.width}x${size.height}`);
+      }
+      if (size.width === 0 || size.height === 0) {
+        if (frameCount % 30 === 0) diag('capturePage: ZERO-SIZE frame (window not painting?)');
+      }
       if (size.width > 0 && size.height > 0) {
         // Aspect-safe: center-crop to the camera aspect before resizing.
         // The output window is exactly CAM_W×CAM_H so this is normally a
@@ -430,6 +470,19 @@ function captureLoop() {
         const jpeg   = scaled.toJPEG(92);
         frameCount++;
 
+        // Black-frame telemetry: log the transition to first lit frame, and a
+        // heartbeat every ~5s (150 frames @30fps) with black/lit + sink state.
+        const black = imageIsBlack(scaled);
+        if (!black && !litEver) {
+          litEver = true;
+          diag(`capturePage: FIRST NON-BLACK frame at frame #${frameCount}`);
+        }
+        if (frameCount % 150 === 0) {
+          diag(`capturePage: frame #${frameCount} ${size.width}x${size.height} `
+            + `black=${black} vcSocket=${!!vcSocket} `
+            + `control=${!!(mainWindow && !mainWindow.isDestroyed())}`);
+        }
+
         if (vcSocket) {
           const header = Buffer.allocUnsafe(4);
           header.writeUInt32BE(jpeg.length);
@@ -441,7 +494,11 @@ function captureLoop() {
           mainWindow.webContents.send('output-frame', jpeg);
         }
       }
-    } catch { /* window closing or socket gone */ }
+    } catch (e) {
+      // Previously swallowed silently — a capturePage exception here looks
+      // identical to a black screen. Log it (throttled).
+      if (frameCount % 30 === 0) diag(`capturePage: ERROR ${e && e.message}`);
+    }
 
     setTimeout(tick, 1000 / CAM_FPS);
   }
@@ -450,6 +507,8 @@ function captureLoop() {
 }
 
 // ── IPC handlers ──────────────────────────────────────────────
+ipcMain.on('diag', (_e, msg) => diag(msg));
+
 ipcMain.handle('open-mic-settings', () => {
   const url = IS_MAC
     ? 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'

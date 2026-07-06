@@ -9,4 +9,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Output window → main → control window: camera gave up, ask the user.
   reportCameraFailed: () => ipcRenderer.invoke('camera-failed'),
   onCameraFailed: cb => ipcRenderer.on('camera-failed', () => cb()),
+  // Camera-pipeline diagnostics: renderer lines land in the shared debug log.
+  diag: msg => ipcRenderer.send('diag', String(msg)),
 });
