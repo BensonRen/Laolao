@@ -792,6 +792,7 @@ const I18N = {
     cam_hint: '请连接摄像头，或在系统设置中检查摄像头权限。',
     btn_start: '开始', cams_denied: '摄像头权限被拒绝', cams_none: '未找到摄像头',
     camera_n: '摄像头 ', cam_start_fail: '无法启动摄像头：',
+    cam_black: '摄像头没有画面 — 请换一个摄像头试试。',
     cp_final: '正式字幕颜色', cp_partial: '临时字幕颜色', cp_bg: '背景',
     cp_opacity: '不透明度', cp_reset: '恢复默认',
     drag_hint: '拖动', drag_reset: '↩ 复位',
@@ -826,6 +827,7 @@ const I18N = {
     cam_hint: 'Connect a webcam, or check camera permissions in System Settings.',
     btn_start: 'Start', cams_denied: 'Camera permission denied', cams_none: 'No cameras found',
     camera_n: 'Camera ', cam_start_fail: 'Could not start camera: ',
+    cam_black: 'The camera shows no picture — try a different one.',
     cp_final: 'Final text', cp_partial: 'Partial text', cp_bg: 'Background',
     cp_opacity: 'Opacity', cp_reset: 'Reset to defaults',
     drag_hint: 'drag', drag_reset: '↩ reset',
@@ -1218,12 +1220,83 @@ async function populateCameras() {
 
 async function startCamera(deviceId) {
   const stream = await navigator.mediaDevices.getUserMedia({
-    video: deviceId ? { deviceId: { exact: deviceId } } : true,
+    // Cap at 720p: the output frame is 720p anyway, and both windows open
+    // this camera. Letting a 4K webcam negotiate full resolution twice can
+    // exceed USB bandwidth — the losing stream then delivers black frames.
+    video: {
+      ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+      width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 },
+    },
     audio: false,
   });
   camVideo.srcObject = stream;
   store(SAVED_CAM_KEY, deviceId);
   picker.classList.add('hidden');
+  watchCamera(deviceId, stream);
+}
+
+// ─── Camera black-frame watchdog ───────────────────────────────
+// USB webcams can wedge after rapid open/close cycles (e.g. the app is
+// relaunched while the previous instance still holds the device):
+// getUserMedia succeeds but every frame is pure black. Real sensors always
+// produce noise, so a frame whose every sampled pixel is exactly 0 is a
+// wedged device, not a dark room. Sample a few seconds after start; on
+// pure black, tear the stream down and reopen it (bounded retries).
+let camWatchTimers = [];
+let camRestarts    = 0;
+const CAM_RESTART_MAX = 3;
+
+function frameIsPureBlack() {
+  if (!camVideo.videoWidth) return false;   // no frame decoded yet — not proof
+  const c = document.createElement('canvas');
+  c.width = 48; c.height = 27;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(camVideo, 0, 0, c.width, c.height);
+  const d = ctx.getImageData(0, 0, c.width, c.height).data;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i] || d[i + 1] || d[i + 2]) return false;
+  }
+  return true;
+}
+
+function restartCamera(deviceId, why) {
+  if (camRestarts >= CAM_RESTART_MAX) {
+    // Out of retries — don't sit on a black frame. In the control window,
+    // reopen the picker with a hint so the user can switch cameras (e.g.
+    // lid-closed built-in camera, wedged USB cam).
+    if (!IS_OUTPUT) {
+      const hint = document.getElementById('cam-hint');
+      hint.textContent = t('cam_black');
+      hint.classList.add('visible');
+      picker.classList.remove('hidden');
+    }
+    return;
+  }
+  camRestarts++;
+  console.warn(`[laolao] camera ${why} — restarting stream (attempt ${camRestarts}/${CAM_RESTART_MAX})`);
+  const s = camVideo.srcObject;
+  if (s) { s.getTracks().forEach(t => t.stop()); camVideo.srcObject = null; }
+  setTimeout(() => startCamera(deviceId).catch(() => {}), 800);
+}
+
+function watchCamera(deviceId, stream) {
+  camWatchTimers.forEach(clearTimeout);
+  camWatchTimers = [3000, 8000, 15000].map(ms => setTimeout(() => {
+    if (camVideo.srcObject !== stream) return;
+    // videoWidth 0 this long after start = the device never delivered a
+    // frame (fully wedged); pure black = frames arriving but dead sensor.
+    if (camVideo.videoWidth === 0) {
+      restartCamera(deviceId, 'delivered no frames');
+    } else if (frameIsPureBlack()) {
+      restartCamera(deviceId, 'delivering pure-black frames');
+    } else {
+      camRestarts = 0;   // healthy frame seen — future wedges get fresh retries
+    }
+  }, ms));
+  // OS revoked the device or it was unplugged/reclaimed
+  stream.getVideoTracks().forEach(tr => tr.addEventListener('ended', () => {
+    if (camVideo.srcObject === stream) restartCamera(deviceId, 'track ended');
+  }));
 }
 
 startBtn.addEventListener('click', () => {
