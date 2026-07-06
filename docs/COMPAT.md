@@ -57,6 +57,20 @@ device (ideally a phone) that face + captions render and remain legible.
   (standard browser device picker; also governed by the browser's camera
   permission).
 
+## Known driver constraints
+
+- **The OBS Camera Extension only works at 1280×720.** Verified empirically
+  (2026-07-05): pyvirtualcam will create the camera at other sizes (e.g.
+  720×1280 portrait) and consumers even enumerate that size, but the
+  extension logs "Pixel buffer size mismatch" and delivers **blank buffers**
+  — apps see a dead feed. Laolao therefore keeps the camera at 1280×720 and
+  composes other aspect ratios inside the frame (letterbox); phone viewers
+  in fill mode crop the bars.
+- **Slight color shift through the extension's YUV conversion.** A pure
+  magenta (255, 0, 255) test pattern arrives at consumers as (255, 40, 255)
+  — a small green lift. Relevant when judging caption color fidelity;
+  high-contrast caption colors are unaffected in practice.
+
 ## Known caveats
 
 - **One producer at a time.** Only one app can *feed* "OBS Virtual Camera".

@@ -117,7 +117,7 @@ ditto ../dist/mac-arm64/Laolao.app /Applications/Laolao.app
 open /Applications/Laolao.app
 ```
 
-On first launch macOS will prompt for **microphone access** — grant it. The app also prompts once for your **admin password** to install the virtual camera driver.
+On first launch macOS will prompt for **microphone access** — grant it. No admin password is needed: the virtual camera driver comes from OBS Studio itself (installed in step 1). If OBS is missing, Laolao shows a dialog pointing at the download page and runs in captions-only mode.
 
 ### 6. Select the camera in your call app
 
@@ -172,16 +172,15 @@ Open camera settings in your video call app and choose **"OBS Virtual Camera"**.
 Run without building the packaged app:
 
 ```bash
-# Terminal 1 — caption server
-./run.sh
-
-# Terminal 2 — Electron shell (no build needed)
 cd electron && npm start
 ```
 
-Or open the overlay standalone in Chrome:
+That's the whole dev loop — `main.js` spawns `server.py` and `virtual_cam.py` itself (supervised, auto-restarting). Don't also run `./run.sh` in another terminal or the two servers will fight over port 8765.
+
+For server-only work (no Electron, no virtual camera), run the server and open the overlay standalone in Chrome:
 
 ```bash
+./run.sh                                     # captures the mic via sounddevice
 open -a "Google Chrome" overlay/index.html
 ```
 
@@ -197,16 +196,23 @@ Command-line options:
 
 ## Overlay Toolbar
 
-| Control | What it does |
-|---|---|
-| **Lang** dropdown | Switch language live — 普通话 / 粤语 / English / 日本語 / 한국어 / Auto |
-| **9:16 / 16:9 / 4:3 / 1:1 / Full** | Constrain viewport to that aspect ratio |
-| **📷 Camera** | Re-open the camera picker to switch input |
-| **Level bar + VAD dot** | Audio pipeline health — green = speaking, yellow = buffering, red = no signal |
-| **Color** | Pick colors for final text, partial text, background, and opacity |
-| **Stats** | Debug panel: WebSocket status, backend, latency, mic RMS, VAD state |
+The toolbar is zh-Hans by default with a **中/EN** language toggle, and starts in **simple mode** for new users — language, level meter, camera, and help. The **高级 / Advanced** toggle reveals everything else.
 
-Caption position is draggable via the **⠿ grip** on the caption block. Click **↩ reset** to return to default. All settings persist in `localStorage`.
+| Control | Mode | What it does |
+|---|---|---|
+| **Lang** dropdown | simple | Switch caption language live — 普通话 / 粤语 / English / 日本語 / 한국어 / Auto |
+| **Level bar + VAD dot** | simple | Audio pipeline health — green = speaking, yellow = buffering, red = no signal |
+| **📷 Camera** | simple | Re-open the camera picker to switch input |
+| **❓ Help** | simple | Re-open the first-call guide (how to pick the camera in WeChat) |
+| **9:16 / 16:9 / 4:3 / 1:1 / Full / Custom** | advanced | Letterbox the output frame to that aspect ratio (camera stays 1280×720) |
+| **🪞 Mirror** | advanced | Flip the self-view only — the far end always sees un-mirrored video |
+| **📱 Safe** | advanced | Show phone-viewer safe-zone guides (self-view only, never transmitted) |
+| **📐 Width** | advanced | Constrain caption max width (phone/square presets) |
+| **🎨 Color** | advanced | Pick colors for final text, partial text, background, and opacity |
+| **📊 Stats** | advanced | Debug panel: WebSocket status, backend, latency, mic RMS, VAD state |
+| **▴ Hide** | advanced | Auto-hide the toolbar (hover the top edge to peek) |
+
+Caption position is draggable via the **⠿ grip** on the caption block. Click **↩ reset** to return to default. All settings persist in `localStorage` and sync live to the output frame — the self-view is an accurate preview of what the far end sees, at any window size.
 
 ### Mic permission banner
 
@@ -272,59 +278,84 @@ The banner auto-dismisses when the mic signal recovers.
 ```
 Laolao.app  (Electron)
 │
-├── main.js
-│   ├── spawns server.py          ← Python WebSocket + Whisper
-│   ├── spawns virtual_cam.py     ← pyvirtualcam → OBS Camera Extension
-│   └── loads overlay/index.html  ← camera feed + caption UI
+├── main.js  (supervises both Python children; restarts them on crash)
+│   ├── spawns server.py --no-mic   ← Python WebSocket + Whisper
+│   ├── spawns virtual_cam.py       ← pyvirtualcam → OBS driver
+│   ├── control window              ← overlay/index.html (what YOU see)
+│   └── output window (hidden)      ← overlay/index.html?output=1 (what THEY see)
 │
-├── capturePage() @ 30 fps  →  TCP socket  →  virtual_cam.py
-│                                                    ↓
-│                                          pyvirtualcam (arm64 / x86-64)
+├── control window — toolbar, panels, mirrored self-view, mic capture.
+│   NEVER captured: your controls can't leak into the call.
+│
+├── output window — chrome-free, un-mirrored, exactly 1280×720.
+│   capturePage() @ 30 fps → JPEG → TCP :8766 → virtual_cam.py
 │                                                    ↓
 │                                    OBS Camera Extension (Mac)
 │                                    OBS VirtualCam DirectShow (Windows)
 │                                          (what Zoom sees)
 │
-└── overlay/index.html
-    ├── getUserMedia          live camera feed (real webcam)
-    ├── WebSocket client      auto-reconnect to server.py
-    ├── Toolbar               language, ratio, color, drag, debug
-    └── Mic warn banner       15 s silence → opens OS mic settings
+└── settings sync: both windows share localStorage — camera, colors,
+    caption position/width, ratio all mirror live into the output frame
 ```
+
+**Audio (unified path):** the control window captures your mic with
+`getUserMedia` and **echo cancellation on**, then streams raw PCM to
+`server.py` over the WebSocket. Echo cancellation matters in a real call:
+without it, the other person's voice coming out of your speakers gets
+transcribed and shown as *your* captions. Python never opens the mic
+under Electron (standalone `./run.sh` still uses sounddevice).
 
 ```
 server.py
 │
-├── sounddevice         16 kHz mono float32 audio
-├── VAD (Silero / Energy)   speech / silence detection
-├── Whisper backend     local transcription
-│   ├── MLX             Apple Silicon Neural Engine
-│   └── faster-whisper  CUDA / CPU (CTranslate2)
-└── websockets          JSON → overlay (partial + final captions)
+├── WebSocket binary frames    16 kHz int16 PCM from the control window
+├── VAD (Silero / Energy)      speech / silence detection
+├── Whisper backend            local transcription
+│   ├── MLX                    Apple Silicon Neural Engine
+│   └── faster-whisper         CUDA / CPU (CTranslate2)
+└── websockets                 JSON → overlay (partial + final captions)
 ```
 
 **WebSocket messages (server → overlay):**
 ```json
 { "type": "partial", "text": "你好，奶奶" }
 { "type": "final",   "text": "你好，奶奶，我今天很好！" }
+{ "type": "clear_partial" }
 { "type": "clear" }
 { "type": "stats",   "backend": "MLX", "model": "small" }
 { "type": "level",   "rms": 0.012, "vad": true, "buffer_s": 1.4 }
 ```
 
-**WebSocket messages (overlay → server):**
+**WebSocket messages (overlay → server):** JSON `set_language` plus binary PCM audio frames:
 ```json
 { "type": "set_language", "language": "yue" }
 ```
+
+**Camera geometry is fixed at 1280×720.** The OBS Camera Extension
+delivers blank buffers at any other size (verified empirically — portrait
+cameras enumerate but show a dead feed). Choosing 9:16 / 4:3 / 1:1 in the
+toolbar letterboxes that shape *inside* the 16:9 frame with black bars;
+phone viewers in fill mode crop the bars away and get the full-height
+portrait view.
 
 ---
 
 ## Troubleshooting
 
-**"OBS Virtual Camera" not visible in Zoom**
+**"OBS Virtual Camera" not visible in Zoom / WeChat**
 - Make sure Laolao.app is running (it registers the camera on launch)
 - Ensure OBS Studio 28+ is installed (its Camera Extension / DirectShow driver is required)
-- Fully quit and reopen Zoom after launching Laolao
+- Fully quit and reopen the call app after launching Laolao — apps enumerate cameras at launch
+- Per-app camera picker locations are documented in [docs/COMPAT.md](docs/COMPAT.md)
+
+**"OBS Studio Not Found" dialog on launch**
+- Laolao has no virtual camera driver of its own; install [OBS Studio 28+](https://obsproject.com/) and relaunch
+- Choosing "Continue Without Camera" runs captions-only mode: the caption window works, but no virtual camera appears in call apps
+
+**Camera shows black bars on the sides**
+- That's the aspect-ratio letterbox: you picked 9:16 / 4:3 / 1:1 in the toolbar, and the camera itself is always 1280×720 (a hard OBS Camera Extension limit)
+- Phone viewers in fill mode crop the bars automatically — the far end on a phone sees the full-height portrait view
+- Pick "Full" in the toolbar to fill the whole 16:9 frame
 
 **Laolao and OBS both need the virtual camera**
 - Only one app can use "OBS Virtual Camera" at a time
@@ -347,8 +378,9 @@ server.py
 - Confirm `device` is `auto` or `mlx` in config (not `cpu`)
 - Try `--model base`
 
-**Traditional Chinese output instead of Simplified**
-- Set `language` to `zh` or `yue` — OpenCC `t2s` conversion is automatic for those codes
+**Traditional Chinese output instead of Simplified (or vice versa)**
+- With `language` set to `zh` or `yue`, OpenCC converts Traditional → Simplified by default
+- Prefer Traditional (HK/TW readers)? Set `"t2s": false` in `config.json`
 
 **Windows: virtual camera not working from SSH**
 - The OBS virtual camera driver requires an interactive GUI session on Windows
@@ -360,7 +392,7 @@ server.py
 
 ### Own virtual camera (no OBS dependency)
 
-Currently Laolao uses the OBS Camera Extension as its virtual camera driver, which means OBS must be installed and the two apps share the same camera slot. The clean fix is a dedicated `CMIOExtension` (Apple, macOS 13+) for Mac — **"Laolao Camera"** independent of OBS — and a dedicated DirectShow filter for Windows. Both require additional platform signing/certification.
+Currently Laolao uses the OBS Camera Extension as its virtual camera driver, which means OBS must be installed, the two apps share the same camera slot, **and the camera is locked to 1280×720** — we verified empirically (2026-07) that the extension delivers blank buffers at any other size, which is why portrait output is composed via in-frame letterboxing instead of a real 720×1280 camera. The clean fix is a dedicated `CMIOExtension` (Apple, macOS 13+) for Mac — **"Laolao Camera"** independent of OBS, with native portrait support — and a dedicated DirectShow filter for Windows. Both require additional platform signing/certification.
 
 ### Smarter transcription
 
