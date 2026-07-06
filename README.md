@@ -196,7 +196,7 @@ Command-line options:
 
 ## Overlay Toolbar
 
-The toolbar is zh-Hans by default with a **中/EN** language toggle, and starts in **simple mode** for new users — language, level meter, camera, and help. The **高级 / Advanced** toggle reveals everything else.
+The toolbar has two separate language controls: the caption-language dropdown (what Whisper transcribes) and a **🌐 UI-language selector** for the app chrome itself (简体中文 / 繁體中文 / English / 日本語 / 한국어, auto-detected from your OS on first run). It starts in **simple mode** for new users — language, level meter, camera, and help. The **高级 / Advanced** toggle reveals everything else.
 
 | Control | Mode | What it does |
 |---|---|---|

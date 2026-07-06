@@ -260,10 +260,11 @@
     .tb-btn-width.active { background: rgba(255,149,0,0.45);  color: #fff; border-color: #ff9500;  }
     .tb-btn-help   { color: #ffd60a; border-color: rgba(255,214,10,0.45);  background: rgba(255,214,10,0.10); }
     .tb-btn-help:hover   { background: rgba(255,214,10,0.28);  color: #fff; }
-    .tb-btn-lang,
     .tb-btn-adv    { color: #98989f; border-color: rgba(255,255,255,0.22); background: rgba(255,255,255,0.07); }
-    .tb-btn-lang:hover,
     .tb-btn-adv:hover    { background: rgba(255,255,255,0.18); color: #fff; }
+    /* UI-language selector: 🌐 marker + names in their own language */
+    #ui-lang-globe { padding-right: 0; text-transform: none; }
+    #ui-lang-select { max-width: 96px; }
 
     /* ── Simple mode ──
        Default for new users: only language, level meter, camera, help and
@@ -587,7 +588,7 @@
 <!-- Top toolbar -->
 <div id="toolbar">
   <span class="tb-label" data-i18n="tb_lang">Lang</span>
-  <select id="lang-select" class="tb-select">
+  <select id="lang-select" class="tb-select" data-i18n-title="tb_lang">
     <option value="zh">普通话</option>
     <option value="yue">粤语</option>
     <option value="en">English</option>
@@ -620,7 +621,8 @@
   <button id="color-toggle"  class="tb-btn tb-btn-color adv"  data-i18n="btn_color"  data-i18n-title="title_color">🎨 Color</button>
   <button id="debug-toggle"  class="tb-btn tb-btn-stats adv"  data-i18n="btn_stats"  data-i18n-title="title_stats">📊 Stats</button>
   <button id="hide-toggle"   class="tb-btn tb-btn-hide adv">▴ Hide</button>
-  <button id="ui-lang-toggle" class="tb-btn tb-btn-lang" data-i18n-title="title_lang_toggle">EN</button>
+  <span class="tb-label" id="ui-lang-globe">🌐</span>
+  <select id="ui-lang-select" class="tb-select" data-i18n-title="title_lang_toggle"></select>
   <button id="help-toggle"   class="tb-btn tb-btn-help"  data-i18n="btn_help" data-i18n-title="title_help">❓ Help</button>
   <button id="simple-toggle" class="tb-btn tb-btn-adv"></button>
 </div>
@@ -759,6 +761,7 @@
   </div>
 </div>
 
+<script src="i18n.js"></script>
 <script>
 // ─── URL params ────────────────────────────────────────────────
 const params     = new URLSearchParams(location.search);
@@ -794,105 +797,50 @@ function store(key, val)  { if (!IS_OUTPUT) _ls.setItem(key, val); }
 function unstore(key)     { if (!IS_OUTPUT) _ls.removeItem(key); }
 
 // ─── UI language (i18n) ────────────────────────────────────────
-// zh-Hans is the default for this Chinese-first product; EN available via
-// the toolbar toggle. Content language (what Whisper transcribes) is the
-// separate lang-select — this only affects chrome text.
+// The dictionary lives in overlay/i18n.js (window.LAOLAO_I18N). This is the
+// language of the app chrome only — the content language (what Whisper
+// transcribes) is the separate lang-select. The dropdown offers exactly the
+// languages Laolao also supports for captions; first run auto-detects from
+// the OS locale, unsupported locales fall back to English.
 const UI_LANG_KEY = 'laolao_ui_lang';
-let uiLang = localStorage.getItem(UI_LANG_KEY) || 'zh';
-if (uiLang !== 'zh' && uiLang !== 'en') uiLang = 'zh';
+const I18N = window.LAOLAO_I18N || {};
+const UI_LANGS = ['zh', 'zh-Hant', 'en', 'ja', 'ko'];
 
-const I18N = {
-  zh: {
-    tb_lang: '语言', tb_ratio: '画幅',
-    ratio_full: '全屏', ratio_custom: '自定义…', lang_auto: '自动检测',
-    pl_noaudio: '无音频', pl_nosignal: '无信号', pl_speaking: '说话中',
-    pl_buffering: '缓冲中…', pl_listening: '聆听中', pl_nodata: '无数据',
-    btn_cam: '📷 摄像头', btn_mirror: '🪞 镜像', btn_safe: '📱 安全区',
-    btn_width: '📐 宽度', btn_color: '🎨 颜色', btn_stats: '📊 统计',
-    btn_help: '❓ 帮助',
-    hide: '▴ 隐藏', show: '▾ 显示',
-    adv_show: '高级 ▾', adv_hide: '简单 ▴',
-    title_cam: '切换摄像头', title_mirror: '水平翻转画面（仅自己可见，对方看到的不镜像）',
-    title_safe: '显示手机观看安全区', title_width: '字幕最大宽度',
-    title_color: '字幕颜色', title_stats: '统计与诊断',
-    title_help: '使用指南', title_lang_toggle: 'Switch UI language',
-    title_adv_show: '显示全部选项', title_adv_hide: '精简工具栏',
-    hide_title: '隐藏工具栏（鼠标移到顶部显示）', show_title: '固定工具栏',
-    wp_label: '字幕最大宽度', wp_phone: '📱 手机 (9∶16)',
-    wp_square: '⬛ 方形 (1∶1)', wp_full: '⬜ 全宽',
-    micwarn_msg: '🎙 未检测到麦克风信号。', micwarn_btn: '打开麦克风设置',
-    picker_sub: '选择用于字幕的摄像头', cams_loading: '正在加载摄像头…',
-    cam_hint: '请连接摄像头，或在系统设置中检查摄像头权限。',
-    btn_start: '开始', cams_denied: '摄像头权限被拒绝', cams_none: '未找到摄像头',
-    camera_n: '摄像头 ', cam_start_fail: '无法启动摄像头：',
-    cam_black: '摄像头没有画面 — 请换一个摄像头试试。',
-    preview_wait: '等待输出画面…',
-    cp_final: '正式字幕颜色', cp_partial: '临时字幕颜色', cp_bg: '背景',
-    cp_opacity: '不透明度', cp_reset: '恢复默认',
-    drag_hint: '拖动', drag_reset: '↩ 复位',
-    err_int: '只能输入整数', err_min: '必须 ≥ 1', err_max: '最大 30', err_aspect: '宽高比最大 3∶1',
-    ob_title: '使用指南', ob_sub: '三步把实时字幕带进视频通话',
-    ob_step1: '选择摄像头，对着麦克风说话，确认下方出现字幕',
-    ob_step2: '打开微信（或 Zoom / FaceTime），开始视频通话',
-    ob_step3: '通话中点按「切换摄像头」按钮，选择 “OBS Virtual Camera”',
-    ob_step4: '对方看到的就是这里的画面 —— 工具栏和面板永远不会被发送',
-    ob_gotit: '知道了',
-  },
-  en: {
-    tb_lang: 'Lang', tb_ratio: 'Ratio',
-    ratio_full: 'Full', ratio_custom: 'Custom…', lang_auto: 'Auto',
-    pl_noaudio: 'no audio', pl_nosignal: 'no signal', pl_speaking: 'speaking',
-    pl_buffering: 'buffering…', pl_listening: 'listening', pl_nodata: 'no data',
-    btn_cam: '📷 Camera', btn_mirror: '🪞 Mirror', btn_safe: '📱 Safe',
-    btn_width: '📐 Width', btn_color: '🎨 Color', btn_stats: '📊 Stats',
-    btn_help: '❓ Help',
-    hide: '▴ Hide', show: '▾ Show',
-    adv_show: 'Advanced ▾', adv_hide: 'Simple ▴',
-    title_cam: 'Switch camera', title_mirror: 'Flip self-view horizontally (the far end is never mirrored)',
-    title_safe: 'Show phone-viewer safe zones', title_width: 'Caption max width',
-    title_color: 'Caption colors', title_stats: 'Stats & diagnostics',
-    title_help: 'Quick start guide', title_lang_toggle: '切换界面语言',
-    title_adv_show: 'Show all controls', title_adv_hide: 'Fewer controls',
-    hide_title: 'Hide toolbar (hover top to show)', show_title: 'Pin toolbar (hover top to peek)',
-    wp_label: 'Max caption width', wp_phone: '📱 Phone (9∶16)',
-    wp_square: '⬛ Square (1∶1)', wp_full: '⬜ Full',
-    micwarn_msg: '🎙 No mic signal detected.', micwarn_btn: 'Open Mic Settings',
-    picker_sub: 'Select the camera to use for captions', cams_loading: 'Loading cameras…',
-    cam_hint: 'Connect a webcam, or check camera permissions in System Settings.',
-    btn_start: 'Start', cams_denied: 'Camera permission denied', cams_none: 'No cameras found',
-    camera_n: 'Camera ', cam_start_fail: 'Could not start camera: ',
-    cam_black: 'The camera shows no picture — try a different one.',
-    preview_wait: 'Waiting for output frames…',
-    cp_final: 'Final text', cp_partial: 'Partial text', cp_bg: 'Background',
-    cp_opacity: 'Opacity', cp_reset: 'Reset to defaults',
-    drag_hint: 'drag', drag_reset: '↩ reset',
-    err_int: 'integers only', err_min: 'must be ≥ 1', err_max: 'max 30', err_aspect: 'ratio max 3∶1',
-    ob_title: 'Quick Start', ob_sub: 'Live captions into your video call, in three steps',
-    ob_step1: 'Pick your camera, speak, and confirm captions appear below',
-    ob_step2: 'Open WeChat (or Zoom / FaceTime) and start a video call',
-    ob_step3: 'In the call, tap the camera-switch button and choose "OBS Virtual Camera"',
-    ob_step4: 'The far end sees exactly this view — the toolbar and panels are never transmitted',
-    ob_gotit: 'Got it',
-  },
-};
+function detectUiLang() {
+  const nav = navigator.language || 'en';
+  if (UI_LANGS.includes(nav)) return nav;
+  const low = nav.toLowerCase();
+  if (low.startsWith('zh')) {
+    return (low.includes('hant') || low.startsWith('zh-tw') ||
+            low.startsWith('zh-hk') || low.startsWith('zh-mo')) ? 'zh-Hant' : 'zh';
+  }
+  const prefix = low.split('-')[0];
+  return UI_LANGS.find(c => c.toLowerCase() === prefix) || 'en';
+}
+
+let uiLang = localStorage.getItem(UI_LANG_KEY) || detectUiLang();
+if (!UI_LANGS.includes(uiLang)) uiLang = 'en';
+
 
 function t(key) {
-  return (I18N[uiLang] && I18N[uiLang][key]) ?? I18N.en[key] ?? key;
+  return (I18N[uiLang] && I18N[uiLang][key])
+      ?? (I18N.en && I18N.en[key])
+      ?? key;
 }
 
 // Apply static translations to every [data-i18n]/[data-i18n-title] node.
 // Elements whose text later turns dynamic (pipeline label, custom-ratio
 // button) remove their data-i18n attribute so this never clobbers them.
+const _HTML_LANG = { zh: 'zh-Hans', 'zh-Hant': 'zh-Hant' };
 function applyI18n() {
-  document.documentElement.lang = uiLang === 'zh' ? 'zh-Hans' : 'en';
+  if (!I18N.en) return;   // i18n.js failed to load — keep built-in English text
+  document.documentElement.lang = _HTML_LANG[uiLang] || uiLang;
   document.querySelectorAll('[data-i18n]').forEach(el => {
     el.textContent = t(el.dataset.i18n);
   });
   document.querySelectorAll('[data-i18n-title]').forEach(el => {
     el.title = t(el.dataset.i18nTitle);
   });
-  const lt = document.getElementById('ui-lang-toggle');
-  if (lt) lt.textContent = uiLang === 'zh' ? 'EN' : '中文';
 }
 applyI18n();
 
@@ -1452,9 +1400,18 @@ simpleBtn.addEventListener('click', () => {
 
 setSimpleMode(localStorage.getItem(UI_SIMPLE_KEY) !== '0');
 
-// ─── UI language toggle ────────────────────────────────────────
-document.getElementById('ui-lang-toggle').addEventListener('click', () => {
-  uiLang = uiLang === 'zh' ? 'en' : 'zh';
+// ─── UI language selector ──────────────────────────────────────
+// Options are the caption-supported languages only, each shown in its own
+// name (from the dictionary's _name).
+const uiLangSelect = document.getElementById('ui-lang-select');
+UI_LANGS.forEach(code => {
+  const name = (I18N[code] && I18N[code]._name) || code;
+  uiLangSelect.appendChild(new Option(name, code));
+});
+uiLangSelect.value = uiLang;
+
+uiLangSelect.addEventListener('change', () => {
+  uiLang = uiLangSelect.value;
   store(UI_LANG_KEY, uiLang);
   applyI18n();
   // Refresh the dynamic (non-data-i18n) texts in their current state
