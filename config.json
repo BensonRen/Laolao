@@ -1,6 +1,7 @@
 {
   "model": "small",
   "language": "zh",
+  "t2s": true,
   "device": "mlx",
   "compute_type": "int8",
   "ws_port": 8765,

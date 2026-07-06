@@ -44,6 +44,8 @@ DEFAULTS: dict = {
     "language": "zh",          # zh|yue|en|ja|ko|auto
     "device": "auto",          # auto|cpu|cuda|mlx
     "compute_type": "int8",    # int8|float16|float32
+    "t2s": True,               # convert Traditional → Simplified for zh/yue
+                               # (set false for HK/TW readers who want Traditional)
 
     # VAD
     "vad": "auto",             # auto|silero|energy
@@ -96,7 +98,8 @@ async def _broadcast(msg: dict) -> None:
         return
     payload = json.dumps(msg, ensure_ascii=False)
     dead = set()
-    for ws in _clients:
+    # Snapshot: _clients can be mutated by connects/disconnects while we await
+    for ws in list(_clients):
         try:
             await ws.send(payload)
         except websockets.ConnectionClosed:
@@ -178,9 +181,27 @@ class UtteranceProcessor:
         self._last_transcribe_t: Optional[float] = None
         self._last_result: str = ""
 
-        # Convert Traditional → Simplified for zh/yue; no-op for other langs
+        # ── Inference worker thread (runs Whisper off the audio path) ──
+        # feed() and _flush() enqueue snapshots here; the worker does the
+        # blocking transcribe and emits the partial/final. This prevents
+        # head-of-line blocking: if Whisper is slow the audio thread keeps
+        # draining the mic instead of piling up while we wait.
+        #
+        # Coalescing: only the most recent PARTIAL is kept (older pending
+        # partials are dropped, since they'd emit stale text by the time
+        # they ran). FINAL requests always queue and are never dropped.
+        self._tx_q: queue.Queue = queue.Queue()
+        self._tx_inflight = False
+        self._tx_inflight_lock = threading.Lock()
+        self._tx_thread = threading.Thread(
+            target=self._tx_worker, daemon=True, name="laolao-transcribe")
+        self._tx_thread.start()
+
+        # Convert Traditional → Simplified for zh/yue; no-op for other langs.
+        # Disabled entirely when cfg["t2s"] is false (HK/TW Traditional readers).
         _convert_langs = {"zh", "yue"}
-        if (cfg.get("language") or "").lower() in _convert_langs:
+        if (bool(cfg.get("t2s", True))
+                and (cfg.get("language") or "").lower() in _convert_langs):
             from opencc import OpenCC
             self._opencc = OpenCC('t2s')
         else:
@@ -204,7 +225,7 @@ class UtteranceProcessor:
         _cjk = {"zh", "yue", "ja", "ko"}
         lang_key = (language or "").lower()
         self._max_chars_per_sec = 10.0 if lang_key in _cjk else 20.0
-        if lang_key in {"zh", "yue"}:
+        if lang_key in {"zh", "yue"} and bool(self._cfg.get("t2s", True)):
             from opencc import OpenCC
             self._opencc = OpenCC('t2s')
         else:
@@ -270,25 +291,14 @@ class UtteranceProcessor:
             self._silence_count = 0
             self._in_utterance = True
             self._buffer = np.concatenate([self._buffer, chunk])
-            if len(self._buffer) > self._rolling_samples:
-                self._buffer = self._buffer[-self._rolling_samples:]
+            if len(self._buffer) >= self._rolling_samples:
+                self._commit_segment()
 
             if self._show_partial:
                 now = time.monotonic()
                 if now - self._last_partial_t >= self._partial_interval:
                     self._last_partial_t = now
-                    t0 = time.perf_counter()
-                    text = self._backend.transcribe(self._buffer, self._language)
-                    lat = (time.perf_counter() - t0) * 1000
-                    self._latencies = (self._latencies + [lat])[-50:]
-                    self._last_transcribe_t = time.monotonic()
-                    self._last_result = text[:60] if text else ""
-                    if text and text != self._last_partial_text and self._plausible(text, self._buffer):
-                        text = self._to_simplified(text)
-                        self._last_partial_text = text
-                        self._n_partials += 1
-                        push({"type": "partial", "text": text})
-                        log.info("~  %s", text)
+                    self._enqueue_transcribe("partial", self._buffer.copy())
 
         elif self._in_utterance:
             # Accumulate a bit of trailing silence so Whisper hears sentence end
@@ -304,8 +314,20 @@ class UtteranceProcessor:
             self._last_stats_t = now
             self._push_stats()
 
+    def _commit_segment(self) -> None:
+        """The utterance outgrew the rolling window. Finalise the whole
+        buffer as a committed caption (so the start of a long sentence is
+        never silently dropped), keep a short overlap tail for continuity,
+        and stay in the utterance."""
+        audio = self._buffer
+        overlap = int(self._sr * 0.5)
+        self._buffer = audio[-overlap:].copy()
+        self._last_partial_text = ""
+        self._last_partial_t = 0.0
+        self._enqueue_transcribe("final", audio)
+
     def _flush(self) -> None:
-        """Finalise current utterance."""
+        """Finalise current utterance — enqueue a final transcribe."""
         self._in_utterance = False
         self._silence_count = 0
         self._last_partial_text = ""
@@ -314,23 +336,82 @@ class UtteranceProcessor:
         audio = self._buffer
         self._buffer = np.array([], dtype=np.int16)
         self._vad.reset()
+        self._enqueue_transcribe("final", audio)
 
+    # ─── Async transcription worker ────────────────────────────────
+
+    def _enqueue_transcribe(self, kind: str, audio: np.ndarray) -> None:
+        """Hand a snapshot to the worker. Partials coalesce: a newer partial
+        replaces an older pending one so the worker never falls behind on
+        stale text. Finals always queue."""
+        if kind == "partial":
+            with self._tx_inflight_lock:
+                if self._tx_inflight:
+                    # A transcribe is running; replace any pending partial
+                    # with this newer snapshot.
+                    self._drain_pending_partials()
+                self._tx_q.put((kind, audio, self._language))
+        else:
+            self._tx_q.put((kind, audio, self._language))
+
+    def _drain_pending_partials(self) -> None:
+        """Remove queued partials so a newer one can take their place.
+        Finals are preserved."""
+        keep: list = []
+        while True:
+            try:
+                item = self._tx_q.get_nowait()
+            except queue.Empty:
+                break
+            if item[0] != "partial":
+                keep.append(item)
+        for item in keep:
+            self._tx_q.put(item)
+
+    def _tx_worker(self) -> None:
+        while True:
+            kind, audio, language = self._tx_q.get()
+            with self._tx_inflight_lock:
+                self._tx_inflight = True
+            try:
+                self._run_transcribe(kind, audio, language)
+            except Exception:
+                log.exception("transcribe worker error")
+            finally:
+                with self._tx_inflight_lock:
+                    self._tx_inflight = False
+
+    def _run_transcribe(self, kind: str, audio: np.ndarray, language) -> None:
         t0 = time.perf_counter()
-        text = self._backend.transcribe(audio, self._language)
+        text = self._backend.transcribe(audio, language)
         lat = (time.perf_counter() - t0) * 1000
         self._latencies = (self._latencies + [lat])[-50:]
         self._last_transcribe_t = time.monotonic()
         self._last_result = text[:60] if text else ""
 
+        if kind == "partial":
+            if text and text != self._last_partial_text and self._plausible(text, audio):
+                text = self._to_simplified(text)
+                self._last_partial_text = text
+                self._n_partials += 1
+                push({"type": "partial", "text": text})
+                log.info("~  %s", text)
+            return
+
+        # kind == "final"
         if text and self._plausible(text, audio):
             text = self._to_simplified(text)
             self._n_finals += 1
             push({"type": "final", "text": text})
             log.info("✓  %s", text)
-        elif text:
-            self._n_rejected += 1
-            log.warning("⚠ Rejected hallucination (%d chars / %.1fs): %s",
-                        len(text), len(audio) / self._sr, text[:60])
+        else:
+            if text:
+                self._n_rejected += 1
+                log.warning("⚠ Rejected hallucination (%d chars / %.1fs): %s",
+                            len(text), len(audio) / self._sr, text[:60])
+            # No final will replace the last partial — tell the overlay to
+            # drop it so stale yellow text doesn't linger on screen.
+            push({"type": "clear_partial"})
         self._push_stats()
 
 
@@ -346,11 +427,14 @@ _electron_audio = False
 
 
 def feed_electron_audio(pcm_int16: np.ndarray) -> None:
-    """Called from the WS handler when the overlay sends an audio chunk."""
+    """Called from the WS handler when the overlay sends an audio chunk.
+
+    Enqueue only — VAD + transcription run on the consumer thread, never
+    on the asyncio event loop (Silero inference would block every client).
+    """
     global _electron_audio
     _electron_audio = True
-    if _processor:
-        _processor.feed(pcm_int16)
+    _audio_q.put(pcm_int16)
 
 
 def _audio_cb(indata: np.ndarray, frames: int, t, status) -> None:
@@ -360,9 +444,21 @@ def _audio_cb(indata: np.ndarray, frames: int, t, status) -> None:
     _audio_q.put(chunk.copy())
 
 
-def _audio_loop(processor: UtteranceProcessor,
-                device: Optional[int | str],
-                chunk_samples: int) -> None:
+def _consume_loop(processor: UtteranceProcessor) -> None:
+    """Single consumer for ALL audio sources (sounddevice mic and Electron
+    WS frames). Runs on its own thread so VAD/feed never block the event
+    loop; runs even under --no-mic."""
+    while _running:
+        try:
+            chunk = _audio_q.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        processor.feed(chunk)
+
+
+def _mic_loop(device: Optional[int | str], chunk_samples: int) -> None:
+    """Keep the sounddevice input stream open; its callback enqueues
+    chunks into _audio_q for the consumer thread."""
     log.info("Opening microphone (device=%s)…", device)
     try:
         stream = sd.InputStream(
@@ -382,11 +478,7 @@ def _audio_loop(processor: UtteranceProcessor,
     with stream:
         log.info("Listening. Speak into your microphone…")
         while _running:
-            try:
-                chunk = _audio_q.get(timeout=0.5)
-                processor.feed(chunk)
-            except queue.Empty:
-                continue
+            time.sleep(0.5)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -512,15 +604,24 @@ def main() -> None:
     _processor = processor
 
     chunk_samples = int(16_000 * cfg["chunk_ms"] / 1000)
+
+    # Consumer always runs — it drains _audio_q whether chunks come from
+    # the local mic or from Electron over WebSocket.
+    consumer_thread = threading.Thread(
+        target=_consume_loop, args=(processor,),
+        daemon=True, name="laolao-audio",
+    )
+    consumer_thread.start()
+
     if args.no_mic:
         log.info("--no-mic: skipping sounddevice; waiting for audio over WebSocket…")
     else:
-        audio_thread = threading.Thread(
-            target=_audio_loop,
-            args=(processor, cfg["mic_device"], chunk_samples),
+        mic_thread = threading.Thread(
+            target=_mic_loop,
+            args=(cfg["mic_device"], chunk_samples),
             daemon=True,
         )
-        audio_thread.start()
+        mic_thread.start()
 
     asyncio.run(_run_server(cfg))
 
