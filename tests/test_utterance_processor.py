@@ -120,8 +120,12 @@ def test_long_utterance_commits_segments_covering_all_audio(pushed):
         seen.update(np.unique(audio).tolist())
     assert seen == set(range(1, 9))
 
+    # The fake backend returns identical text for all three segments, so the
+    # short tail-flush final is suppressed by the overlap dedup guard; the
+    # two window-commits are emitted. (Real segments transcribe differently.)
     assert wait_for(
-        lambda: sum(1 for m in pushed if m.get("type") == "final") >= 3)
+        lambda: sum(1 for m in pushed if m.get("type") == "final") >= 2)
+    assert wait_for(lambda: proc._n_dup_dropped == 1)
 
 
 def test_commit_keeps_overlap_tail_and_stays_in_utterance(pushed):
@@ -223,6 +227,102 @@ def test_consume_loop_feeds_on_its_own_thread(monkeypatch):
         monkeypatch.setattr(server, "_running", False)
         t.join(timeout=2)
     assert not t.is_alive()
+
+
+# ──────────────────────────────────────────────────────────────
+# Overlap-tail dedup — a flush right after a window-commit that merely
+# re-transcribes the 0.5 s overlap tail is dropped; genuine speech is not.
+# ──────────────────────────────────────────────────────────────
+
+class SeqBackend:
+    """Returns the scripted texts in order; empty string once exhausted."""
+
+    name = "fake-seq"
+
+    def __init__(self, texts) -> None:
+        self.texts = list(texts)
+        self.calls: list[np.ndarray] = []
+
+    def transcribe(self, audio, language=None) -> str:
+        self.calls.append(np.asarray(audio).copy())
+        return self.texts.pop(0) if self.texts else ""
+
+
+def test_flush_after_commit_drops_overlap_tail_duplicate(pushed):
+    # Commit emits "你好"; the flush right after covers only the 0.5 s
+    # overlap tail (+2 silence chunks = 1.0 s) and transcribes to the same
+    # text — the overlap-tail signature. It must be dropped.
+    backend = FakeBackend(text="你好")
+    vad = ScriptedVAD([True] * 4)
+    proc = server.UtteranceProcessor(backend, vad, make_cfg())
+
+    for v in range(1, 5):                     # fill the window → commit
+        proc.feed(chunk_of(v))
+    proc.feed(chunk_of(9))                    # silence ×2 → flush
+    proc.feed(chunk_of(9))
+
+    assert wait_for(lambda: len(backend.calls) >= 2)
+    assert wait_for(lambda: proc._n_dup_dropped == 1)
+    finals = [m for m in pushed if m.get("type") == "final"]
+    assert len(finals) == 1                   # only the commit was emitted
+    # The dropped flush still clears any lingering partial.
+    assert any(m.get("type") == "clear_partial" for m in pushed)
+
+
+def test_flush_after_commit_with_new_text_is_emitted(pushed):
+    # Same timing as above, but the tail flush transcribes to different
+    # text (not a suffix of the committed caption) — genuine new speech.
+    backend = SeqBackend(["你好世界", "再见"])
+    vad = ScriptedVAD([True] * 4)
+    proc = server.UtteranceProcessor(backend, vad, make_cfg())
+
+    for v in range(1, 5):
+        proc.feed(chunk_of(v))
+    proc.feed(chunk_of(9))
+    proc.feed(chunk_of(9))
+
+    assert wait_for(
+        lambda: sum(1 for m in pushed if m.get("type") == "final") == 2)
+    assert proc._n_dup_dropped == 0
+
+
+def test_long_flush_after_commit_is_not_deduped(pushed):
+    # A flush whose audio exceeds _DUP_MAX_AUDIO_S is real speech even if
+    # the model returns the same text (e.g. the speaker actually repeated
+    # the sentence): 0.5 s tail + 7 silence chunks = 2.25 s > 2.0 s.
+    backend = FakeBackend(text="你好")
+    vad = ScriptedVAD([True] * 4)
+    proc = server.UtteranceProcessor(
+        backend, vad, make_cfg(silence_chunks=7))
+
+    for v in range(1, 5):                     # fill the window → commit
+        proc.feed(chunk_of(v))
+    for _ in range(7):                        # long silence → 2.25 s flush
+        proc.feed(chunk_of(9))
+
+    assert wait_for(
+        lambda: sum(1 for m in pushed if m.get("type") == "final") == 2)
+    assert proc._n_dup_dropped == 0
+
+
+def test_flush_to_flush_repetition_is_never_deduped(pushed):
+    # Two short utterances with identical text and no commit in between —
+    # a speaker genuinely repeating themselves. Both captions must show.
+    backend = FakeBackend(text="好")
+    vad = ScriptedVAD([True, True, False, False, True, True])
+    proc = server.UtteranceProcessor(
+        backend, vad, make_cfg(rolling_window_s=10.0))
+
+    for v in (1, 2, 9, 9):                    # utterance 1 → flush
+        proc.feed(chunk_of(v))
+    assert wait_for(
+        lambda: sum(1 for m in pushed if m.get("type") == "final") == 1)
+    for v in (3, 4, 9, 9):                    # utterance 2, same text
+        proc.feed(chunk_of(v))
+
+    assert wait_for(
+        lambda: sum(1 for m in pushed if m.get("type") == "final") == 2)
+    assert proc._n_dup_dropped == 0
 
 
 # ──────────────────────────────────────────────────────────────

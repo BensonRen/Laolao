@@ -155,6 +155,13 @@ class UtteranceProcessor:
         {"type": "stats",   …}             ← debug panel update
     """
 
+    # Overlap-tail dedup thresholds (see _is_overlap_duplicate): a flush
+    # final this short, this soon after a window-commit, whose text is a
+    # suffix of the committed caption, is the re-transcribed overlap tail —
+    # not new speech. (Max flush audio = 0.5 s tail + silence_chunks.)
+    _DUP_MAX_AUDIO_S = 2.0
+    _DUP_WINDOW_S = 5.0
+
     def __init__(self, backend, vad, cfg: dict) -> None:
         self._backend = backend
         self._vad = vad
@@ -213,10 +220,19 @@ class UtteranceProcessor:
         lang_key = (cfg.get("language") or "").lower()
         self._max_chars_per_sec = 10.0 if lang_key in _cjk else 20.0
 
+        # Overlap-tail dedup: a window-commit keeps 0.5 s of audio for
+        # continuity, so a flush right after a commit re-transcribes that
+        # tail and can repeat the committed caption's ending. Track the last
+        # emitted final so _is_overlap_duplicate() can drop that signature.
+        self._last_final_text = ""
+        self._last_final_t = 0.0
+        self._last_final_was_commit = False
+
         # Stats counters
         self._n_partials = 0
         self._n_finals = 0
         self._n_rejected = 0
+        self._n_dup_dropped = 0
         self._latencies: list[float] = []   # ms, capped at last 50
 
     def set_language(self, language: str) -> None:
@@ -255,6 +271,7 @@ class UtteranceProcessor:
                 "partials": self._n_partials,
                 "finals": self._n_finals,
                 "rejected": self._n_rejected,
+                "dup_dropped": self._n_dup_dropped,
             },
             "latency_ms": {
                 "last":  round(lats[-1], 1) if lats else None,
@@ -324,7 +341,9 @@ class UtteranceProcessor:
         self._buffer = audio[-overlap:].copy()
         self._last_partial_text = ""
         self._last_partial_t = 0.0
-        self._enqueue_transcribe("final", audio)
+        # "commit" is a final, but tagged so the emission path can recognise
+        # (and drop) a flush that merely re-transcribes the overlap tail.
+        self._enqueue_transcribe("commit", audio)
 
     def _flush(self) -> None:
         """Finalise current utterance — enqueue a final transcribe."""
@@ -381,6 +400,21 @@ class UtteranceProcessor:
                 with self._tx_inflight_lock:
                     self._tx_inflight = False
 
+    def _is_overlap_duplicate(self, kind: str, text: str,
+                              audio: np.ndarray) -> bool:
+        """True when a flush final is just the re-transcribed overlap tail
+        of the immediately preceding window-commit: short audio, arriving
+        right after a commit, with text that is a suffix of the committed
+        caption. Flush→flush pairs are never deduped, so a speaker genuinely
+        repeating themselves ("好，好") still gets both captions."""
+        if kind != "final" or not self._last_final_was_commit:
+            return False
+        if len(audio) / self._sr > self._DUP_MAX_AUDIO_S:
+            return False
+        if time.monotonic() - self._last_final_t > self._DUP_WINDOW_S:
+            return False
+        return self._last_final_text.endswith(text)
+
     def _run_transcribe(self, kind: str, audio: np.ndarray, language) -> None:
         t0 = time.perf_counter()
         text = self._backend.transcribe(audio, language)
@@ -398,12 +432,23 @@ class UtteranceProcessor:
                 log.info("~  %s", text)
             return
 
-        # kind == "final"
+        # kind == "final" (utterance flush) or "commit" (rolling-window commit)
         if text and self._plausible(text, audio):
             text = self._to_simplified(text)
-            self._n_finals += 1
-            push({"type": "final", "text": text})
-            log.info("✓  %s", text)
+            if self._is_overlap_duplicate(kind, text, audio):
+                self._n_dup_dropped += 1
+                self._last_final_was_commit = False
+                log.debug("Dropped overlap-tail duplicate final: %s", text[:60])
+                # The dropped flush still ended the utterance — clear any
+                # partial so stale yellow text doesn't linger.
+                push({"type": "clear_partial"})
+            else:
+                self._n_finals += 1
+                self._last_final_text = text
+                self._last_final_t = time.monotonic()
+                self._last_final_was_commit = (kind == "commit")
+                push({"type": "final", "text": text})
+                log.info("✓  %s", text)
         else:
             if text:
                 self._n_rejected += 1
@@ -421,9 +466,11 @@ class UtteranceProcessor:
 
 _audio_q: queue.Queue = queue.Queue()
 
-# When Electron streams audio over WebSocket we feed it here directly
-# and skip sounddevice entirely.
-_electron_audio = False
+# True while the sounddevice input stream is open. Electron audio should
+# only arrive under --no-mic; both sources feeding at once means every
+# utterance is transcribed twice (double captions).
+_mic_active = False
+_dual_source_warned = False
 
 
 def feed_electron_audio(pcm_int16: np.ndarray) -> None:
@@ -432,8 +479,14 @@ def feed_electron_audio(pcm_int16: np.ndarray) -> None:
     Enqueue only — VAD + transcription run on the consumer thread, never
     on the asyncio event loop (Silero inference would block every client).
     """
-    global _electron_audio
-    _electron_audio = True
+    global _dual_source_warned
+    if _mic_active and not _dual_source_warned:
+        _dual_source_warned = True
+        log.warning(
+            "Electron is streaming audio while the local microphone is also "
+            "open — both sources feed the transcriber, so captions will "
+            "double. Run the server with --no-mic when the overlay streams "
+            "audio.")
     _audio_q.put(pcm_int16)
 
 
@@ -475,10 +528,15 @@ def _mic_loop(device: Optional[int | str], chunk_samples: int) -> None:
                   "which streams audio directly (no mic permission needed for Python).")
         return
 
+    global _mic_active
     with stream:
+        _mic_active = True
         log.info("Listening. Speak into your microphone…")
-        while _running:
-            time.sleep(0.5)
+        try:
+            while _running:
+                time.sleep(0.5)
+        finally:
+            _mic_active = False
 
 
 # ──────────────────────────────────────────────────────────────
