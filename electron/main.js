@@ -8,16 +8,94 @@ const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 
 // ── Paths ──────────────────────────────────────────────────────
-// When packaged the repo lives at ~/code/Laolao; in dev it's one level up.
-const ROOT    = app.isPackaged
-  ? path.join(app.getPath('home'), 'code', 'Laolao')
-  : path.join(__dirname, '..');
-const VENV_PY = IS_WIN
-  ? path.join(ROOT, 'venv', 'Scripts', 'python.exe')
-  : path.join(ROOT, 'venv', 'bin', 'python');
-const SERVER_PY = path.join(ROOT, 'server.py');
-const VCAM_PY   = path.join(ROOT, 'virtual_cam.py');
-const OVERLAY   = path.join(ROOT, 'overlay', 'index.html');
+// Dev: the repo is one level up, no questions asked. Packaged: the engine
+// lives in a repo checkout resolved from (in order) the LAOLAO_ROOT env var,
+// the `root` field of <userData>/settings.json, then ~/code/Laolao — each
+// candidate must actually contain server.py and a venv. If none qualifies,
+// ensureRoot() walks the user through picking/fixing one at startup.
+let ROOT, VENV_PY, SERVER_PY, VCAM_PY, OVERLAY;
+
+function venvPyFor(root) {
+  return IS_WIN
+    ? path.join(root, 'venv', 'Scripts', 'python.exe')
+    : path.join(root, 'venv', 'bin', 'python');
+}
+
+function rootValid(root) {
+  return !!root
+    && fs.existsSync(path.join(root, 'server.py'))
+    && fs.existsSync(venvPyFor(root));
+}
+
+function applyRoot(root) {
+  ROOT      = root;
+  VENV_PY   = venvPyFor(root);
+  SERVER_PY = path.join(root, 'server.py');
+  VCAM_PY   = path.join(root, 'virtual_cam.py');
+  OVERLAY   = path.join(root, 'overlay', 'index.html');
+}
+
+applyRoot(path.join(__dirname, '..'));   // dev default; packaged apps re-resolve in ensureRoot()
+
+// ── Settings (<userData>/settings.json) ────────────────────────
+function settingsFile() { return path.join(app.getPath('userData'), 'settings.json'); }
+
+function readSettings() {
+  try { return JSON.parse(fs.readFileSync(settingsFile(), 'utf8')); } catch { return {}; }
+}
+
+function writeSettings(patch) {
+  const merged = { ...readSettings(), ...patch };
+  try {
+    fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
+    fs.writeFileSync(settingsFile(), JSON.stringify(merged, null, 2));
+  } catch (e) { console.error('[settings] write failed:', e.message); }
+}
+
+// Returns the resolved root (packaged), or null if the user chose to quit.
+async function ensureRoot() {
+  if (!app.isPackaged) return ROOT;
+
+  const candidates = [
+    process.env.LAOLAO_ROOT,
+    readSettings().root,
+    path.join(app.getPath('home'), 'code', 'Laolao'),
+  ];
+  for (const c of candidates) if (rootValid(c)) return c;
+
+  // Nothing valid — explain and let the user point us at the checkout.
+  for (;;) {
+    const { response } = await dialog.showMessageBox({
+      type: 'error',
+      title: 'Laolao Setup Needed',
+      message: 'Laolao could not find its caption engine',
+      detail:
+        'Laolao runs a local Python engine from a repo folder containing ' +
+        'server.py and a venv/. Expected at ~/code/Laolao.\n\n' +
+        'To fix:\n' +
+        '  1. git clone https://github.com/BensonRen/Laolao ~/code/Laolao\n' +
+        '  2. cd ~/code/Laolao && ./setup.sh\n\n' +
+        'If it lives elsewhere, click "Choose Folder…" (or set LAOLAO_ROOT).',
+      buttons: ['Choose Folder…', 'Quit'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 1) return null;
+
+    const pick = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+    if (pick.canceled || !pick.filePaths[0]) continue;
+    if (rootValid(pick.filePaths[0])) {
+      writeSettings({ root: pick.filePaths[0] });
+      return pick.filePaths[0];
+    }
+    await dialog.showMessageBox({
+      type: 'warning',
+      message: 'That folder is missing server.py or venv/',
+      detail: 'Pick the Laolao repo folder after running setup.sh inside it.',
+      buttons: ['OK'],
+    });
+  }
+}
 
 // ── Ports & camera geometry ────────────────────────────────────
 const WS_PORT   = 8765;
@@ -119,43 +197,114 @@ function spawnPython(script, args = []) {
 
 // Restart a child with exponential backoff when it exits unexpectedly.
 // Backoff: 1s → 2s → 4s … capped at 15s; reset after 60s of healthy uptime.
-function supervise(name, spawnFn) {
-  let proc        = null;
-  let backoffMs   = 1000;
-  let startedAt   = 0;
-  let intentional = false;   // restart() in flight — not a crash
+// Crash-loop cutoff: 5 consecutive exits with <10s uptime stop the restarts
+// and surface a dialog (Retry / Continue) instead of churning forever.
+// All (re)starts flow through schedule()/start() with a single pending timer,
+// so only one child can ever be alive per supervisor.
+function supervise(name, spawnFn, { friendlyName = name, failHint = '' } = {}) {
+  const FAST_CRASH_MS    = 10_000;
+  const MAX_FAST_CRASHES = 5;
+
+  let proc         = null;
+  let alive        = false;   // spawn 'error' and 'exit' can both fire — dedupe
+  let backoffMs    = 1000;
+  let startedAt    = 0;
+  let intentional  = false;   // restart() in flight — not a crash
+  let fastCrashes  = 0;       // consecutive exits with uptime < FAST_CRASH_MS
+  let stopped      = false;   // crash-loop cutoff hit (until user retries)
+  let pendingTimer = null;    // the one scheduled start
+
+  function schedule(delay) {
+    if (isQuitting || stopped) return;
+    clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(start, delay);
+  }
 
   function start() {
-    if (isQuitting) return;
+    clearTimeout(pendingTimer);
+    pendingTimer = null;
+    if (isQuitting || stopped || alive) return;
     startedAt = Date.now();
     proc = spawnFn();
-    proc.on('exit', code => {
+    alive = true;
+
+    const onDown = code => {
+      if (!alive) return;
+      alive = false;
       console.log(`[${name}] exited (${code})`);
-      if (isQuitting) return;
+      if (isQuitting || stopped) return;
+
+      const uptime = Date.now() - startedAt;
       if (intentional) {
         // Reconfigure restart (e.g. new camera dimensions) — no backoff
         // penalty; brief pause so the OS releases the device cleanly.
         intentional = false;
         backoffMs = 1000;
+        fastCrashes = 0;
         console.log(`[${name}] restarting (reconfigure)…`);
-        setTimeout(start, 300);
+        schedule(300);
         return;
       }
-      if (Date.now() - startedAt > 60_000) backoffMs = 1000;
+
+      fastCrashes = uptime < FAST_CRASH_MS ? fastCrashes + 1 : 0;
+      if (uptime > 60_000) backoffMs = 1000;
+
+      if (fastCrashes >= MAX_FAST_CRASHES) {
+        stopped = true;
+        console.error(`[${name}] crashed ${fastCrashes}× in a row — giving up.`);
+        showCrashDialog();
+        return;
+      }
+
       const delay = backoffMs;
       backoffMs = Math.min(backoffMs * 2, 15_000);
       console.log(`[${name}] restarting in ${delay} ms…`);
-      setTimeout(start, delay);
+      schedule(delay);
+    };
+
+    proc.on('exit', onDown);
+    // spawn failure (e.g. missing interpreter) emits 'error' with no 'exit'
+    proc.on('error', err => {
+      console.error(`[${name}] spawn error: ${err.message}`);
+      onDown(-1);
+    });
+  }
+
+  function showCrashDialog() {
+    if (isQuitting) return;
+    dialog.showMessageBox({
+      type: 'error',
+      title: 'Laolao',
+      message: `${friendlyName} failed repeatedly`,
+      detail: failHint,
+      buttons: ['Retry', 'Continue'],
+      defaultId: 0,
+      cancelId: 1,
+    }).then(({ response }) => {
+      if (isQuitting || response !== 0) return;
+      stopped = false;
+      fastCrashes = 0;
+      backoffMs = 1000;
+      start();
     });
   }
 
   start();
   return {
-    kill() { try { proc?.kill(); } catch {} },
+    kill() {
+      stopped = true;
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+      try { proc?.kill(); } catch {}
+    },
     // Kill + respawn with the CURRENT config (spawnFn reads live variables).
     restart() {
       if (isQuitting) return;
-      if (!proc || proc.exitCode !== null) { start(); return; }
+      stopped = false;
+      fastCrashes = 0;
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+      if (!alive) { start(); return; }
       intentional = true;
       try { proc.kill(); } catch { intentional = false; }
     },
@@ -309,15 +458,32 @@ app.whenReady().then(async () => {
     await systemPreferences.askForMediaAccess('microphone');
   }
 
+  // Packaged apps must locate a valid repo checkout (server.py + venv)
+  // before anything can spawn; dev resolves to __dirname/.. with no checks.
+  const resolvedRoot = await ensureRoot();
+  if (!resolvedRoot) { app.quit(); return; }
+  applyRoot(resolvedRoot);
+  console.log(`[startup] engine root: ${ROOT}`);
+
   const obsAvailable = await checkObs();
 
   // The renderer streams mic audio over WebSocket on every platform, so
   // Python never opens the mic itself (unified path; Chromium provides AEC).
-  serverSup = supervise('server', () => spawnPython(SERVER_PY, ['--no-mic']));
+  serverSup = supervise('server', () => spawnPython(SERVER_PY, ['--no-mic']), {
+    friendlyName: 'Caption engine',
+    failHint:
+      'The Python caption server keeps crashing. Check that setup completed ' +
+      `(run setup.sh in ${ROOT}) and that ${path.join(ROOT, 'venv')} is intact.`,
+  });
 
   if (obsAvailable) {
     vcamSup = supervise('virtual_cam', () =>
-      spawnPython(VCAM_PY, [String(CAM_W), String(CAM_H), String(CAM_FPS)]));
+      spawnPython(VCAM_PY, [String(CAM_W), String(CAM_H), String(CAM_FPS)]), {
+      friendlyName: 'Virtual camera',
+      failHint:
+        'The virtual camera helper keeps crashing. Is OBS Studio 28 or newer ' +
+        'installed? Its Camera Extension provides the driver Laolao uses.',
+    });
   } else {
     console.log('[vcam] OBS not found — running captions-only (no virtual camera)');
   }
