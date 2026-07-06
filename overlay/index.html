@@ -18,10 +18,16 @@
       --bg: rgba(0, 0, 0, 0.72);
       --color-final: #ffffff;
       --color-partial: #ffe066;
-      --padding: 16px 28px;
+      --pad-y: 16px;
+      --pad-x: 28px;
       --border-radius: 14px;
       --fade-ms: 4000;
       --transition: 0.25s ease;
+      /* WYSIWYG scale: the output frame renders at the 720p reference
+         (scale 1); the control window multiplies caption metrics by
+         viewportHeight / outputBoxHeight so the self-view always shows
+         captions at the same relative size the far end receives. */
+      --ui-scale: 1;
     }
 
     html, body {
@@ -95,7 +101,8 @@
       backdrop-filter: blur(10px);
       border-bottom: 1px solid rgba(255,255,255,0.08);
       z-index: 200;
-      font-family: 'SF Mono', 'Menlo', monospace;
+      /* SF Mono for latin/digits; CJK glyphs fall through to PingFang/YaHei */
+      font-family: 'SF Mono', 'Menlo', 'PingFang SC', 'Microsoft YaHei', monospace;
       overflow: hidden;
       transition: transform 0.22s ease;
     }
@@ -228,6 +235,70 @@
     .tb-btn-width  { color: #ff9500; border-color: rgba(255,149,0,0.45);   background: rgba(255,149,0,0.10);  }
     .tb-btn-width:hover  { background: rgba(255,149,0,0.28);   color: #fff; }
     .tb-btn-width.active { background: rgba(255,149,0,0.45);  color: #fff; border-color: #ff9500;  }
+    .tb-btn-help   { color: #ffd60a; border-color: rgba(255,214,10,0.45);  background: rgba(255,214,10,0.10); }
+    .tb-btn-help:hover   { background: rgba(255,214,10,0.28);  color: #fff; }
+    .tb-btn-lang,
+    .tb-btn-adv    { color: #98989f; border-color: rgba(255,255,255,0.22); background: rgba(255,255,255,0.07); }
+    .tb-btn-lang:hover,
+    .tb-btn-adv:hover    { background: rgba(255,255,255,0.18); color: #fff; }
+
+    /* ── Simple mode ──
+       Default for new users: only language, level meter, camera, help and
+       the advanced toggle. Everything tagged .adv appears in advanced mode.
+       Controls are bigger — the target user may not be technical. */
+    body.ui-simple .adv { display: none !important; }
+    body.ui-simple #toolbar   { padding: 10px 12px; gap: 8px; }
+    body.ui-simple .tb-btn    { font-size: 14px; padding: 6px 14px; border-radius: 9px; }
+    body.ui-simple .tb-select { font-size: 15px; padding: 6px 10px; max-width: 140px; }
+    body.ui-simple .tb-label  { font-size: 13px; }
+
+    /* ── First-run onboarding card ── */
+    #onboard {
+      position: fixed; inset: 0; z-index: 300;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(4px);
+    }
+    #onboard.hidden { display: none; }
+    #onboard-card {
+      background: rgba(22,22,24,0.96);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 16px;
+      padding: 26px 30px 24px;
+      max-width: 440px; width: calc(100% - 48px);
+      box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+      font-family: 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
+      color: #ececec;
+      position: relative;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    #onboard-card h2 { font-size: 20px; font-weight: 700; letter-spacing: 0.02em; }
+    #onboard-card .ob-sub { font-size: 13px; color: #9a9aa0; margin-top: -8px; }
+    .ob-step {
+      display: flex; align-items: flex-start; gap: 12px;
+      font-size: 15px; line-height: 1.55;
+    }
+    .ob-num {
+      flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%;
+      background: rgba(10,132,255,0.22); border: 1px solid rgba(10,132,255,0.6);
+      color: #6db6ff; font-size: 13px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      margin-top: 1px;
+    }
+    #onboard-gotit {
+      margin-top: 4px; align-self: stretch;
+      font-size: 16px; font-weight: 600; padding: 12px 0;
+      border: none; border-radius: 10px;
+      background: #0a84ff; color: #fff; cursor: pointer;
+      font-family: inherit;
+    }
+    #onboard-gotit:hover { background: #0071e3; }
+    #onboard-close {
+      position: absolute; top: 12px; right: 14px;
+      background: none; border: none; color: rgba(255,255,255,0.55);
+      font-size: 18px; cursor: pointer; padding: 2px 4px;
+    }
+    #onboard-close:hover { color: #fff; }
 
     /* ── Caption max-width popover ── */
     #width-pop {
@@ -381,7 +452,7 @@
     /* ── Caption stage (draggable) ── */
     #stage-wrap {
       position: absolute;   /* anchored to #viewport, not the window */
-      bottom: 60px; left: 5%;
+      bottom: calc(60px * var(--ui-scale)); left: 5%;
       z-index: 10;
       display: flex;
       flex-direction: row;
@@ -436,7 +507,7 @@
 
     #stage {
       display: flex; flex-direction: column;
-      align-items: flex-start; gap: 10px;
+      align-items: flex-start; gap: calc(10px * var(--ui-scale));
       pointer-events: none;
     }
 
@@ -446,9 +517,10 @@
       background: var(--bg); color: var(--color-final);
       font-family: 'NotoSansSC','Noto Sans SC','PingFang SC','华文黑体',
                    'STHeiti','Microsoft YaHei','微软雅黑','Hiragino Sans GB',sans-serif;
-      font-size: var(--font-size); font-weight: 600;
+      font-size: calc(var(--font-size) * var(--ui-scale)); font-weight: 600;
       line-height: 1.3; letter-spacing: 0.02em;
-      padding: var(--padding); border-radius: var(--border-radius);
+      padding: calc(var(--pad-y) * var(--ui-scale)) calc(var(--pad-x) * var(--ui-scale));
+      border-radius: calc(var(--border-radius) * var(--ui-scale));
       /* CJK wraps per-character; overflow-wrap covers unbroken Latin runs
          without splitting normal English words mid-word. */
       word-break: normal; overflow-wrap: anywhere; line-break: loose;
@@ -472,6 +544,7 @@
     body.output-mode #debug-panel,
     body.output-mode #drag-grip,
     body.output-mode #safe-overlay,
+    body.output-mode #onboard,
     body.output-mode #picker { display: none !important; }
 
     /* ── OBS chroma key ── */
@@ -488,53 +561,56 @@
 
 <!-- Top toolbar -->
 <div id="toolbar">
-  <span class="tb-label">Lang</span>
+  <span class="tb-label" data-i18n="tb_lang">Lang</span>
   <select id="lang-select" class="tb-select">
     <option value="zh">普通话</option>
     <option value="yue">粤语</option>
     <option value="en">English</option>
     <option value="ja">日本語</option>
     <option value="ko">한국어</option>
-    <option value="auto">Auto</option>
+    <option value="auto" data-i18n="lang_auto">Auto</option>
   </select>
 
-  <div class="tb-sep"></div>
-  <span class="tb-label">Ratio</span>
-  <button class="ratio-btn" data-ratio="9:16">9∶16</button>
-  <button class="ratio-btn" data-ratio="16:9">16∶9</button>
-  <button class="ratio-btn" data-ratio="4:3">4∶3</button>
-  <button class="ratio-btn" data-ratio="1:1">1∶1</button>
-  <button class="ratio-btn active" data-ratio="free">Full</button>
-  <button class="ratio-btn" data-ratio="custom" id="ratio-custom-btn">Custom…</button>
+  <div class="tb-sep adv"></div>
+  <span class="tb-label adv" data-i18n="tb_ratio">Ratio</span>
+  <button class="ratio-btn adv" data-ratio="9:16">9∶16</button>
+  <button class="ratio-btn adv" data-ratio="16:9">16∶9</button>
+  <button class="ratio-btn adv" data-ratio="4:3">4∶3</button>
+  <button class="ratio-btn adv" data-ratio="1:1">1∶1</button>
+  <button class="ratio-btn adv active" data-ratio="free" data-i18n="ratio_full">Full</button>
+  <button class="ratio-btn adv" data-ratio="custom" id="ratio-custom-btn" data-i18n="ratio_custom">Custom…</button>
 
   <div class="tb-sep"></div>
   <div id="pipeline">
     <div id="level-bar-wrap"><div id="level-bar"></div></div>
     <div id="vad-dot" title="VAD: speech detected"></div>
-    <span id="pipeline-label">no audio</span>
+    <span id="pipeline-label" data-i18n="pl_noaudio">no audio</span>
   </div>
 
   <div class="tb-spacer"></div>
-  <button id="cam-toggle"    class="tb-btn tb-btn-cam"    title="Switch camera">📷 Camera</button>
-  <button id="mirror-toggle" class="tb-btn tb-btn-mirror" title="Flip camera horizontally">🪞 Mirror</button>
-  <button id="safe-toggle"   class="tb-btn tb-btn-safe"   title="Show phone-viewer safe zones">📱 Safe</button>
-  <button id="width-toggle"  class="tb-btn tb-btn-width"  title="Caption max width">📐 Width</button>
-  <button id="color-toggle"  class="tb-btn tb-btn-color"  title="Caption colors">🎨 Color</button>
-  <button id="debug-toggle"  class="tb-btn tb-btn-stats"  title="Stats & diagnostics">📊 Stats</button>
-  <button id="hide-toggle"   class="tb-btn tb-btn-hide"   title="Hide toolbar (hover top to show)">▴ Hide</button>
+  <button id="cam-toggle"    class="tb-btn tb-btn-cam"        data-i18n="btn_cam"    data-i18n-title="title_cam">📷 Camera</button>
+  <button id="mirror-toggle" class="tb-btn tb-btn-mirror adv" data-i18n="btn_mirror" data-i18n-title="title_mirror">🪞 Mirror</button>
+  <button id="safe-toggle"   class="tb-btn tb-btn-safe adv"   data-i18n="btn_safe"   data-i18n-title="title_safe">📱 Safe</button>
+  <button id="width-toggle"  class="tb-btn tb-btn-width adv"  data-i18n="btn_width"  data-i18n-title="title_width">📐 Width</button>
+  <button id="color-toggle"  class="tb-btn tb-btn-color adv"  data-i18n="btn_color"  data-i18n-title="title_color">🎨 Color</button>
+  <button id="debug-toggle"  class="tb-btn tb-btn-stats adv"  data-i18n="btn_stats"  data-i18n-title="title_stats">📊 Stats</button>
+  <button id="hide-toggle"   class="tb-btn tb-btn-hide adv">▴ Hide</button>
+  <button id="ui-lang-toggle" class="tb-btn tb-btn-lang" data-i18n-title="title_lang_toggle">EN</button>
+  <button id="help-toggle"   class="tb-btn tb-btn-help"  data-i18n="btn_help" data-i18n-title="title_help">❓ Help</button>
+  <button id="simple-toggle" class="tb-btn tb-btn-adv"></button>
 </div>
 
 <!-- Caption width popover -->
 <div id="width-pop" class="hidden">
   <div class="wp-row">
-    <span>Max caption width</span>
+    <span data-i18n="wp_label">Max caption width</span>
     <span class="wp-val" id="wp-val">100%</span>
   </div>
   <input type="range" id="wp-slider" min="20" max="100" step="1" value="100">
   <div class="wp-presets">
-    <button class="wp-preset" data-preset="phone"  data-val="32">📱 Phone (9∶16)</button>
-    <button class="wp-preset" data-preset="square" data-val="56">⬛ Square (1∶1)</button>
-    <button class="wp-preset" data-preset="full"   data-val="100">⬜ Full</button>
+    <button class="wp-preset" data-preset="phone"  data-val="32"  data-i18n="wp_phone">📱 Phone (9∶16)</button>
+    <button class="wp-preset" data-preset="square" data-val="56"  data-i18n="wp_square">⬛ Square (1∶1)</button>
+    <button class="wp-preset" data-preset="full"   data-val="100" data-i18n="wp_full">⬜ Full</button>
   </div>
 </div>
 
@@ -552,34 +628,34 @@
 
 <!-- Mic permission warning banner -->
 <div id="mic-warn" class="hidden">
-  🎙 No mic signal detected.
-  <button id="mic-warn-btn">Open Mic Settings</button>
+  <span data-i18n="micwarn_msg">🎙 No mic signal detected.</span>
+  <button id="mic-warn-btn" data-i18n="micwarn_btn">Open Mic Settings</button>
   <button id="mic-warn-close" title="Dismiss">✕</button>
 </div>
 
 <!-- Color panel -->
 <div id="color-panel" class="hidden">
   <div class="cp-row">
-    <span class="cp-label">Final text</span>
+    <span class="cp-label" data-i18n="cp_final">Final text</span>
     <input type="color" id="cp-final" value="#ffffff">
   </div>
   <div class="cp-row">
-    <span class="cp-label">Partial text</span>
+    <span class="cp-label" data-i18n="cp_partial">Partial text</span>
     <input type="color" id="cp-partial" value="#ffe066">
   </div>
   <hr class="cp-divider">
   <div class="cp-row">
-    <span class="cp-label">Background</span>
+    <span class="cp-label" data-i18n="cp_bg">Background</span>
     <input type="color" id="cp-bg" value="#000000">
   </div>
   <div class="cp-row">
-    <span class="cp-label">Opacity</span>
+    <span class="cp-label" data-i18n="cp_opacity">Opacity</span>
     <input type="range" id="cp-bg-opacity" min="0" max="100" value="72">
     <span id="cp-bg-opacity-val" style="color:#aaa;min-width:28px;text-align:right">72%</span>
   </div>
   <hr class="cp-divider">
   <div class="cp-row">
-    <button class="cp-reset" id="cp-reset-all">Reset to defaults</button>
+    <button class="cp-reset" id="cp-reset-all" data-i18n="cp_reset">Reset to defaults</button>
   </div>
 </div>
 
@@ -620,10 +696,10 @@
   </div>
   <div id="picker">
     <h1>老老 Laolao</h1>
-    <p>Select the camera to use for captions</p>
-    <select id="cam-select"><option value="">Loading cameras…</option></select>
-    <p id="cam-hint">Connect a webcam, or check camera permissions in System Settings.</p>
-    <button id="start-btn">Start</button>
+    <p data-i18n="picker_sub">Select the camera to use for captions</p>
+    <select id="cam-select"><option value="" data-i18n="cams_loading">Loading cameras…</option></select>
+    <p id="cam-hint" data-i18n="cam_hint">Connect a webcam, or check camera permissions in System Settings.</p>
+    <button id="start-btn" data-i18n="btn_start">Start</button>
   </div>
 
   <!-- Draggable subtitle area (anchored to the visible viewport) -->
@@ -635,10 +711,24 @@
         <span><i></i><i></i></span>
         <span><i></i><i></i></span>
       </div>
-      <span id="drag-hint-text">drag</span>
-      <button id="drag-reset">↩ reset</button>
+      <span id="drag-hint-text" data-i18n="drag_hint">drag</span>
+      <button id="drag-reset" data-i18n="drag_reset">↩ reset</button>
     </div>
     <div id="stage"></div>
+  </div>
+</div>
+
+<!-- First-run onboarding (control window only; never rendered in output mode) -->
+<div id="onboard" class="hidden">
+  <div id="onboard-card">
+    <button id="onboard-close" title="✕">✕</button>
+    <h2 data-i18n="ob_title">Quick Start</h2>
+    <p class="ob-sub" data-i18n="ob_sub">Live captions into your video call, three steps</p>
+    <div class="ob-step"><span class="ob-num">1</span><span data-i18n="ob_step1"></span></div>
+    <div class="ob-step"><span class="ob-num">2</span><span data-i18n="ob_step2"></span></div>
+    <div class="ob-step"><span class="ob-num">3</span><span data-i18n="ob_step3"></span></div>
+    <div class="ob-step"><span class="ob-num">4</span><span data-i18n="ob_step4"></span></div>
+    <button id="onboard-gotit" data-i18n="ob_gotit">Got it</button>
   </div>
 </div>
 
@@ -669,6 +759,105 @@ if (IS_OUTPUT)  document.body.classList.add('output-mode');
 const _ls = window.localStorage;
 function store(key, val)  { if (!IS_OUTPUT) _ls.setItem(key, val); }
 function unstore(key)     { if (!IS_OUTPUT) _ls.removeItem(key); }
+
+// ─── UI language (i18n) ────────────────────────────────────────
+// zh-Hans is the default for this Chinese-first product; EN available via
+// the toolbar toggle. Content language (what Whisper transcribes) is the
+// separate lang-select — this only affects chrome text.
+const UI_LANG_KEY = 'laolao_ui_lang';
+let uiLang = localStorage.getItem(UI_LANG_KEY) || 'zh';
+if (uiLang !== 'zh' && uiLang !== 'en') uiLang = 'zh';
+
+const I18N = {
+  zh: {
+    tb_lang: '语言', tb_ratio: '画幅',
+    ratio_full: '全屏', ratio_custom: '自定义…', lang_auto: '自动检测',
+    pl_noaudio: '无音频', pl_nosignal: '无信号', pl_speaking: '说话中',
+    pl_buffering: '缓冲中…', pl_listening: '聆听中', pl_nodata: '无数据',
+    btn_cam: '📷 摄像头', btn_mirror: '🪞 镜像', btn_safe: '📱 安全区',
+    btn_width: '📐 宽度', btn_color: '🎨 颜色', btn_stats: '📊 统计',
+    btn_help: '❓ 帮助',
+    hide: '▴ 隐藏', show: '▾ 显示',
+    adv_show: '高级 ▾', adv_hide: '简单 ▴',
+    title_cam: '切换摄像头', title_mirror: '水平翻转画面（仅自己可见，对方看到的不镜像）',
+    title_safe: '显示手机观看安全区', title_width: '字幕最大宽度',
+    title_color: '字幕颜色', title_stats: '统计与诊断',
+    title_help: '使用指南', title_lang_toggle: 'Switch UI language',
+    title_adv_show: '显示全部选项', title_adv_hide: '精简工具栏',
+    hide_title: '隐藏工具栏（鼠标移到顶部显示）', show_title: '固定工具栏',
+    wp_label: '字幕最大宽度', wp_phone: '📱 手机 (9∶16)',
+    wp_square: '⬛ 方形 (1∶1)', wp_full: '⬜ 全宽',
+    micwarn_msg: '🎙 未检测到麦克风信号。', micwarn_btn: '打开麦克风设置',
+    picker_sub: '选择用于字幕的摄像头', cams_loading: '正在加载摄像头…',
+    cam_hint: '请连接摄像头，或在系统设置中检查摄像头权限。',
+    btn_start: '开始', cams_denied: '摄像头权限被拒绝', cams_none: '未找到摄像头',
+    camera_n: '摄像头 ', cam_start_fail: '无法启动摄像头：',
+    cp_final: '正式字幕颜色', cp_partial: '临时字幕颜色', cp_bg: '背景',
+    cp_opacity: '不透明度', cp_reset: '恢复默认',
+    drag_hint: '拖动', drag_reset: '↩ 复位',
+    err_int: '只能输入整数', err_min: '必须 ≥ 1', err_max: '最大 30', err_aspect: '宽高比最大 3∶1',
+    ob_title: '使用指南', ob_sub: '三步把实时字幕带进视频通话',
+    ob_step1: '选择摄像头，对着麦克风说话，确认下方出现字幕',
+    ob_step2: '打开微信（或 Zoom / FaceTime），开始视频通话',
+    ob_step3: '通话中点按「切换摄像头」按钮，选择 “OBS Virtual Camera”',
+    ob_step4: '对方看到的就是这里的画面 —— 工具栏和面板永远不会被发送',
+    ob_gotit: '知道了',
+  },
+  en: {
+    tb_lang: 'Lang', tb_ratio: 'Ratio',
+    ratio_full: 'Full', ratio_custom: 'Custom…', lang_auto: 'Auto',
+    pl_noaudio: 'no audio', pl_nosignal: 'no signal', pl_speaking: 'speaking',
+    pl_buffering: 'buffering…', pl_listening: 'listening', pl_nodata: 'no data',
+    btn_cam: '📷 Camera', btn_mirror: '🪞 Mirror', btn_safe: '📱 Safe',
+    btn_width: '📐 Width', btn_color: '🎨 Color', btn_stats: '📊 Stats',
+    btn_help: '❓ Help',
+    hide: '▴ Hide', show: '▾ Show',
+    adv_show: 'Advanced ▾', adv_hide: 'Simple ▴',
+    title_cam: 'Switch camera', title_mirror: 'Flip self-view horizontally (the far end is never mirrored)',
+    title_safe: 'Show phone-viewer safe zones', title_width: 'Caption max width',
+    title_color: 'Caption colors', title_stats: 'Stats & diagnostics',
+    title_help: 'Quick start guide', title_lang_toggle: '切换界面语言',
+    title_adv_show: 'Show all controls', title_adv_hide: 'Fewer controls',
+    hide_title: 'Hide toolbar (hover top to show)', show_title: 'Pin toolbar (hover top to peek)',
+    wp_label: 'Max caption width', wp_phone: '📱 Phone (9∶16)',
+    wp_square: '⬛ Square (1∶1)', wp_full: '⬜ Full',
+    micwarn_msg: '🎙 No mic signal detected.', micwarn_btn: 'Open Mic Settings',
+    picker_sub: 'Select the camera to use for captions', cams_loading: 'Loading cameras…',
+    cam_hint: 'Connect a webcam, or check camera permissions in System Settings.',
+    btn_start: 'Start', cams_denied: 'Camera permission denied', cams_none: 'No cameras found',
+    camera_n: 'Camera ', cam_start_fail: 'Could not start camera: ',
+    cp_final: 'Final text', cp_partial: 'Partial text', cp_bg: 'Background',
+    cp_opacity: 'Opacity', cp_reset: 'Reset to defaults',
+    drag_hint: 'drag', drag_reset: '↩ reset',
+    err_int: 'integers only', err_min: 'must be ≥ 1', err_max: 'max 30', err_aspect: 'ratio max 3∶1',
+    ob_title: 'Quick Start', ob_sub: 'Live captions into your video call, in three steps',
+    ob_step1: 'Pick your camera, speak, and confirm captions appear below',
+    ob_step2: 'Open WeChat (or Zoom / FaceTime) and start a video call',
+    ob_step3: 'In the call, tap the camera-switch button and choose "OBS Virtual Camera"',
+    ob_step4: 'The far end sees exactly this view — the toolbar and panels are never transmitted',
+    ob_gotit: 'Got it',
+  },
+};
+
+function t(key) {
+  return (I18N[uiLang] && I18N[uiLang][key]) ?? I18N.en[key] ?? key;
+}
+
+// Apply static translations to every [data-i18n]/[data-i18n-title] node.
+// Elements whose text later turns dynamic (pipeline label, custom-ratio
+// button) remove their data-i18n attribute so this never clobbers them.
+function applyI18n() {
+  document.documentElement.lang = uiLang === 'zh' ? 'zh-Hans' : 'en';
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    el.title = t(el.dataset.i18nTitle);
+  });
+  const lt = document.getElementById('ui-lang-toggle');
+  if (lt) lt.textContent = uiLang === 'zh' ? 'EN' : '中文';
+}
+applyI18n();
 
 // ─── Aspect ratio ──────────────────────────────────────────────
 const RATIO_KEY        = 'laolao_ratio';
@@ -764,11 +953,12 @@ const RC_MAX = 30;
 const RC_MAX_ASPECT = 3;     // longest side ≤ 3× shorter side
 
 function validateCustom(w, h) {
-  if (!Number.isInteger(w) || !Number.isInteger(h)) return 'integers only';
-  if (w < 1 || h < 1)            return 'must be ≥ 1';
-  if (w > RC_MAX || h > RC_MAX)  return `max ${RC_MAX}`;
+  // Returns an i18n key ('' = valid); caller renders via t().
+  if (!Number.isInteger(w) || !Number.isInteger(h)) return 'err_int';
+  if (w < 1 || h < 1)            return 'err_min';
+  if (w > RC_MAX || h > RC_MAX)  return 'err_max';
   const long = Math.max(w, h), short = Math.min(w, h);
-  if (long / short > RC_MAX_ASPECT) return `ratio max ${RC_MAX_ASPECT}:1`;
+  if (long / short > RC_MAX_ASPECT) return 'err_aspect';
   return '';
 }
 
@@ -791,11 +981,15 @@ function applyCustomRatio() {
   const w = parseInt(rcW.value, 10);
   const h = parseInt(rcH.value, 10);
   const err = validateCustom(w, h);
-  if (err) { rcErr.textContent = err; return; }
+  if (err) { rcErr.textContent = t(err); return; }
   rcErr.textContent = '';
   store(RATIO_CUSTOM_KEY, `${w}:${h}`);
-  // Update the Custom button label so the chosen ratio is visible
-  document.getElementById('ratio-custom-btn').textContent = `${w}∶${h}`;
+  // Update the Custom button label so the chosen ratio is visible.
+  // Once numeric it's dynamic — detach from applyI18n so a UI-language
+  // toggle doesn't clobber it back to "Custom…".
+  const rcBtn = document.getElementById('ratio-custom-btn');
+  rcBtn.removeAttribute('data-i18n');
+  rcBtn.textContent = `${w}∶${h}`;
   applyRatio('custom');
   requestAnimationFrame(updateSafeOverlay);
   closeCustomRatio();
@@ -820,7 +1014,9 @@ document.addEventListener('mousedown', e => {
   const saved = localStorage.getItem(RATIO_CUSTOM_KEY);
   if (saved) {
     const [w, h] = saved.split(':');
-    document.getElementById('ratio-custom-btn').textContent = `${w}∶${h}`;
+    const rcBtn = document.getElementById('ratio-custom-btn');
+    rcBtn.removeAttribute('data-i18n');   // dynamic label; see applyCustomRatio
+    rcBtn.textContent = `${w}∶${h}`;
   }
 })();
 
@@ -922,19 +1118,46 @@ document.addEventListener('mousedown', e => {
   widthPop.classList.add('hidden');
 });
 
-// Re-derive pixel width on every layout change (window resize, ratio swap)
+// ─── WYSIWYG scale (control window only) ───────────────────────
+// The output frame is fixed 1280×720 with the chosen ratio letterboxed
+// inside it, so the box the far end sees has height min(720, 1280·h/w).
+// The control window scales caption metrics by vpHeight / that reference
+// height, so shrinking or ratio-changing the window never misrepresents
+// how big the captions are in the real output. `fontsize` URL param keeps
+// its meaning: size at the 720p reference.
+function outputBoxHeight() {
+  const r = resolveRatio(localStorage.getItem(RATIO_KEY) || 'free');
+  if (!r) return 720;                       // full 16:9 frame
+  return Math.min(720, 1280 * r.h / r.w);
+}
+
+function updateUiScale() {
+  if (IS_OUTPUT) return;                    // output renders at scale 1
+  const vp = viewport.getBoundingClientRect();
+  const ref = outputBoxHeight();
+  if (!vp.height || !ref) return;
+  document.documentElement.style.setProperty(
+    '--ui-scale', (vp.height / ref).toFixed(4));
+}
+
+// Re-derive pixel width + scale on every layout change (resize, ratio swap)
 window.addEventListener('resize', () => {
   applyCaptionWidth(localStorage.getItem(WIDTH_KEY) || '100');
+  updateUiScale();
 });
 // Re-apply after applyRatio updates the viewport
 const _origApplyRatio = applyRatio;
 applyRatio = function(key) {
   _origApplyRatio(key);
-  requestAnimationFrame(() => applyCaptionWidth(localStorage.getItem(WIDTH_KEY) || '100'));
+  requestAnimationFrame(() => {
+    applyCaptionWidth(localStorage.getItem(WIDTH_KEY) || '100');
+    updateUiScale();
+  });
 };
 
 // Restore on load
 applyCaptionWidth(localStorage.getItem(WIDTH_KEY) || '100');
+updateUiScale();
 
 // ─── Language selector ─────────────────────────────────────────
 const LANG_KEY    = 'laolao_language';
@@ -963,7 +1186,11 @@ const SAVED_CAM_KEY = 'laolao_camera_id';
 async function populateCameras() {
   let tmp;
   try { tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); }
-  catch { camSelect.innerHTML = '<option value="">Camera permission denied</option>'; return; }
+  catch {
+    camSelect.innerHTML = '';
+    camSelect.appendChild(new Option(t('cams_denied'), ''));
+    return;
+  }
   const devices = await navigator.mediaDevices.enumerateDevices();
   tmp.getTracks().forEach(t => t.stop());
   camSelect.innerHTML = '';
@@ -975,13 +1202,14 @@ async function populateCameras() {
     if (VIRTUAL_RE.test(label)) return; // skip virtual cameras
     const opt = document.createElement('option');
     opt.value = cam.deviceId;
-    opt.textContent = label || `Camera ${++physicalIndex}`;
+    opt.textContent = label || t('camera_n') + (++physicalIndex);
     if (cam.deviceId === savedId) opt.selected = true;
     camSelect.appendChild(opt);
   });
   const camHint = document.getElementById('cam-hint');
   if (!camSelect.options.length) {
-    camSelect.innerHTML = '<option value="">No cameras found</option>';
+    camSelect.innerHTML = '';
+    camSelect.appendChild(new Option(t('cams_none'), ''));
     camHint.classList.add('visible');
   } else {
     camHint.classList.remove('visible');
@@ -999,7 +1227,7 @@ async function startCamera(deviceId) {
 }
 
 startBtn.addEventListener('click', () => {
-  startCamera(camSelect.value).catch(e => alert('Could not start camera: ' + e.message));
+  startCamera(camSelect.value).catch(e => alert(t('cam_start_fail') + e.message));
 });
 
 document.getElementById('cam-toggle').addEventListener('click', () => {
@@ -1036,10 +1264,8 @@ let   peekTimer    = null;
 function setToolbarHidden(hidden) {
   document.body.classList.toggle('toolbar-hidden', hidden);
   toolbarEl.classList.remove('peek');
-  hideBtn.textContent = hidden ? '▾ Show' : '▴ Hide';
-  hideBtn.title = hidden
-    ? 'Pin toolbar (hover top to peek)'
-    : 'Hide toolbar (hover top to show)';
+  hideBtn.textContent = hidden ? t('show') : t('hide');
+  hideBtn.title = hidden ? t('show_title') : t('hide_title');
   store(HIDE_KEY, hidden ? '1' : '0');
 }
 
@@ -1066,6 +1292,56 @@ toolbarEl.addEventListener('mouseleave', () => {
 
 // Restore on load
 setToolbarHidden(localStorage.getItem(HIDE_KEY) === '1');
+
+// ─── Simple / advanced mode ────────────────────────────────────
+// Default ON for new users: only language, level meter, camera, help and
+// this toggle. Everything tagged .adv needs advanced mode.
+const UI_SIMPLE_KEY = 'laolao_ui_simple';
+const simpleBtn     = document.getElementById('simple-toggle');
+
+function setSimpleMode(on) {
+  document.body.classList.toggle('ui-simple', on);
+  simpleBtn.textContent = on ? t('adv_show') : t('adv_hide');
+  simpleBtn.title       = on ? t('title_adv_show') : t('title_adv_hide');
+  store(UI_SIMPLE_KEY, on ? '1' : '0');
+}
+
+simpleBtn.addEventListener('click', () => {
+  setSimpleMode(!document.body.classList.contains('ui-simple'));
+});
+
+setSimpleMode(localStorage.getItem(UI_SIMPLE_KEY) !== '0');
+
+// ─── UI language toggle ────────────────────────────────────────
+document.getElementById('ui-lang-toggle').addEventListener('click', () => {
+  uiLang = uiLang === 'zh' ? 'en' : 'zh';
+  store(UI_LANG_KEY, uiLang);
+  applyI18n();
+  // Refresh the dynamic (non-data-i18n) texts in their current state
+  setToolbarHidden(document.body.classList.contains('toolbar-hidden'));
+  setSimpleMode(document.body.classList.contains('ui-simple'));
+  setPl(plState);
+});
+
+// ─── First-run onboarding ──────────────────────────────────────
+// Control window only. Shown until dismissed once; reopenable via ❓.
+const ONBOARD_KEY  = 'laolao_onboarded';
+const onboardEl    = document.getElementById('onboard');
+
+function showOnboard() { onboardEl.classList.remove('hidden'); }
+function dismissOnboard() {
+  onboardEl.classList.add('hidden');
+  store(ONBOARD_KEY, '1');
+}
+
+document.getElementById('onboard-gotit').addEventListener('click', dismissOnboard);
+document.getElementById('onboard-close').addEventListener('click', dismissOnboard);
+onboardEl.addEventListener('mousedown', e => {
+  if (e.target === onboardEl) dismissOnboard();   // click on the backdrop
+});
+document.getElementById('help-toggle').addEventListener('click', showOnboard);
+
+if (!IS_OUTPUT && !localStorage.getItem(ONBOARD_KEY)) showOnboard();
 
 // Output mode: no picker UI — follow the control window's camera choice.
 // Retries cover boot races (camera busy, permission landing late) and the
@@ -1330,7 +1606,24 @@ let lastLevelTime = 0;
 let silentStreak  = 0;   // consecutive silent-level messages
 let noTxStreak    = 0;   // consecutive messages with no recent transcription
 
+// Pipeline label goes through a state key so a UI-language toggle can
+// re-render the current state. Once dynamic, detach from applyI18n.
+const PL_COLORS = {
+  noaudio: '#555', nosignal: '#ff453a', speaking: '#30d158',
+  buffering: '#ffd60a', listening: '#888', nodata: '#ff453a',
+};
+let plState = 'noaudio';
+function setPl(state) {
+  plState = state;
+  pipelineLabel.removeAttribute('data-i18n');
+  pipelineLabel.textContent = t('pl_' + state);
+  pipelineLabel.style.color = PL_COLORS[state];
+}
+
 function updateLevel(msg) {
+  // The hidden output window renders captions only — skip the ~15 DOM
+  // writes per level message that would land in display:none panels.
+  if (IS_OUTPUT) return;
   lastLevelTime = Date.now();
   const rms = msg.rms || 0;
   checkMicRecovery(rms);
@@ -1345,20 +1638,16 @@ function updateLevel(msg) {
 
   // Toolbar label
   if (rms < 0.001) {
-    pipelineLabel.textContent = 'no signal';
-    pipelineLabel.style.color = '#ff453a';
+    setPl('nosignal');
     silentStreak++;
   } else if (msg.vad) {
-    pipelineLabel.textContent = 'speaking';
-    pipelineLabel.style.color = '#30d158';
+    setPl('speaking');
     silentStreak = 0;
   } else if (msg.in_utterance) {
-    pipelineLabel.textContent = 'buffering…';
-    pipelineLabel.style.color = '#ffd60a';
+    setPl('buffering');
     silentStreak = 0;
   } else {
-    pipelineLabel.textContent = 'listening';
-    pipelineLabel.style.color = '#888';
+    setPl('listening');
     silentStreak = 0;
   }
 
@@ -1447,14 +1736,15 @@ micWarnClose.addEventListener('click', () => {
 });
 
 function updateDebugStats(s) {
-  const t = s.transcriptions, l = s.latency_ms;
+  if (IS_OUTPUT) return;   // stats panel doesn't exist visually in output
+  const tr = s.transcriptions, l = s.latency_ms;
   setVal('db-backend', s.backend || '–');
   setVal('db-model',   s.model   || '–');
   setVal('db-lang',    s.language || '–');
   setVal('db-uptime',  fmtUptime(s.uptime_s || 0));
-  setVal('db-partials', t.partials);
-  setVal('db-finals',   t.finals);
-  setVal('db-rejected', t.rejected, t.rejected > 0 ? 'warn' : '');
+  setVal('db-partials', tr.partials);
+  setVal('db-finals',   tr.finals);
+  setVal('db-rejected', tr.rejected, tr.rejected > 0 ? 'warn' : '');
   const [lt, lc] = fmtLat(l.last), [at, ac] = fmtLat(l.avg);
   setVal('db-lat-last',   lt, lc);
   setVal('db-lat-avg',    at, ac);
@@ -1643,15 +1933,17 @@ function connect() {
 
 connect();
 
-// If no level messages for 2s, server audio thread is likely stuck
-setInterval(() => {
-  if (lastLevelTime && Date.now() - lastLevelTime > 2000) {
-    pipelineLabel.textContent = 'no data';
-    pipelineLabel.style.color = '#ff453a';
-    levelBar.style.width = '0%';
-    vadDot.classList.remove('speaking');
-  }
-}, 500);
+// If no level messages for 2s, server audio thread is likely stuck.
+// Control window only — the output window doesn't render the meter.
+if (!IS_OUTPUT) {
+  setInterval(() => {
+    if (lastLevelTime && Date.now() - lastLevelTime > 2000) {
+      setPl('nodata');
+      levelBar.style.width = '0%';
+      vadDot.classList.remove('speaking');
+    }
+  }, 500);
+}
 </script>
 </body>
 </html>
