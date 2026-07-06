@@ -21,6 +21,9 @@
       "category": "public.app-category.utilities",
       "target": "dmg",
       "icon": "icon.icns",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Laolao listens to your microphone to generate real-time captions.",
         "NSCameraUsageDescription": "Laolao shows your camera feed in the caption overlay."

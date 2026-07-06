@@ -7,6 +7,15 @@ const net  = require('net');
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 
+// Keep the hidden/transparent output window's getUserMedia alive. macOS marks
+// non-foreground/occluded web contents as hidden after a few seconds, and
+// Chromium then MUTES camera tracks on hidden documents — the camera opens (OS
+// "in use" light on) but zero frames arrive and capturePage is black. These
+// switches stop Chromium from backgrounding the output window's capture.
+app.commandLine.appendSwitch('disable-features', 'MacWebContentsOcclusion');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+
 // ── Paths ──────────────────────────────────────────────────────
 // Dev: the repo is one level up, no questions asked. Packaged: the engine
 // lives in a repo checkout resolved from (in order) the LAOLAO_ROOT env var,
@@ -532,10 +541,21 @@ app.whenReady().then(async () => {
     cb(['camera', 'microphone', 'media', 'mediaKeySystem'].includes(permission));
   });
 
-  // Trigger the macOS microphone permission dialog. The renderer captures the
-  // mic via getUserMedia (with echo cancellation), so the app needs OS access.
+  // Trigger the macOS camera + microphone permission dialogs from the MAIN
+  // process. The camera is opened in the transparent output window, where a
+  // getUserMedia-triggered TCC prompt can't surface — so if we don't request
+  // camera access here, macOS opens the device but delivers ZERO frames (the
+  // "in use" light comes on, capture is black). Requesting both up front makes
+  // the OS prompt appear and, once granted, frames flow.
   if (IS_MAC && systemPreferences.askForMediaAccess) {
+    const cam = systemPreferences.getMediaAccessStatus('camera');
+    const mic = systemPreferences.getMediaAccessStatus('microphone');
+    console.log(`[perm] camera=${cam} microphone=${mic}`);
+    await systemPreferences.askForMediaAccess('camera');
     await systemPreferences.askForMediaAccess('microphone');
+    console.log('[perm] after request: '
+      + `camera=${systemPreferences.getMediaAccessStatus('camera')} `
+      + `microphone=${systemPreferences.getMediaAccessStatus('microphone')}`);
   }
 
   // Packaged apps must locate a valid repo checkout (server.py + venv)
@@ -593,23 +613,36 @@ app.whenReady().then(async () => {
     if (outputWindow && !outputWindow.isDestroyed()) outputWindow.destroy();
   });
 
-  // Output window: hidden, chrome-free, exactly CAM_W×CAM_H — the virtual
-  // camera frame. paintWhenInitiallyHidden + throttling off keep a
-  // never-shown window painting so capturePage() returns real frames.
+  // Output window: chrome-free, exactly CAM_W×CAM_H — the virtual-camera frame.
+  //
+  // It must NOT be `show:false`: a hidden BrowserWindow reports
+  // document.visibilityState 'hidden', and Chromium MUTES getUserMedia video
+  // tracks on hidden documents (the camera opens — the OS "in use" light comes
+  // on — but zero frames arrive, so capturePage is black). Instead we keep it
+  // genuinely visible to Chromium but invisible to the user: fully transparent
+  // (opacity 0), click-through, always-on-top so no opaque window occludes it
+  // (occlusion would also mark it hidden). capturePage reads the page's own
+  // render buffer regardless of window opacity, so captured frames are opaque.
   outputWindow = new BrowserWindow({
     width: CAM_W,
     height: CAM_H,
+    x: workArea.x,
+    y: workArea.y,
     useContentSize: true,
-    show: false,
+    show: true,
+    opacity: 0,             // invisible to the user; still "visible" to Chromium
+    focusable: false,
     resizable: false,
     skipTaskbar: true,
-    paintWhenInitiallyHidden: true,
+    alwaysOnTop: true,      // never occluded → Chromium keeps its media alive
+    hasShadow: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       backgroundThrottling: false,
     },
   });
+  outputWindow.setIgnoreMouseEvents(true);
 
   outputWindow.loadFile(OVERLAY, { query: { output: '1' } });
   outputWindow.webContents.setBackgroundThrottling(false);
