@@ -49,6 +49,9 @@
     body.portrait-preview #picker { position: absolute; inset: 0; width: 100%; height: 100%; }
 
     /* ── Camera ── */
+    /* Base: viewport fills the window; applyRatio() overrides inline for
+       ratio modes. Positioned so #stage-wrap/#safe-overlay anchor to it. */
+    #viewport { position: fixed; inset: 0; }
     #camera { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; }
     body.cam-mirror #camera { transform: scaleX(-1); }
 
@@ -64,6 +67,11 @@
     }
     #picker h1 { font-size: 28px; font-weight: 600; letter-spacing: 0.05em; }
     #picker p  { font-size: 15px; color: #aaa; }
+    #cam-hint {
+      display: none; font-size: 13px; color: #ffd60a;
+      max-width: 380px; text-align: center; line-height: 1.5;
+    }
+    #cam-hint.visible { display: block; }
     #picker.hidden { display: none; }
     #cam-select {
       font-size: 17px; padding: 10px 18px; border-radius: 10px;
@@ -372,7 +380,7 @@
 
     /* ── Caption stage (draggable) ── */
     #stage-wrap {
-      position: fixed;
+      position: absolute;   /* anchored to #viewport, not the window */
       bottom: 60px; left: 5%;
       z-index: 10;
       display: flex;
@@ -441,12 +449,30 @@
       font-size: var(--font-size); font-weight: 600;
       line-height: 1.3; letter-spacing: 0.02em;
       padding: var(--padding); border-radius: var(--border-radius);
-      word-break: break-all; opacity: 1;
+      /* CJK wraps per-character; overflow-wrap covers unbroken Latin runs
+         without splitting normal English words mid-word. */
+      word-break: normal; overflow-wrap: anywhere; line-break: loose;
+      opacity: 1;
       transition: opacity var(--transition), transform var(--transition);
       transform: translateY(0);
     }
     .line.partial { color: var(--color-partial); }
     .line.fading  { opacity: 0; transform: translateY(-8px); }
+
+    /* ── Output mode (?output=1) ──
+       The hidden window captured into the virtual camera: camera + captions
+       only. Every piece of control chrome is display:none so the far end
+       never sees toolbars, popovers, banners, or safe-zone guides. */
+    body.output-mode #toolbar,
+    body.output-mode #toolbar-edge,
+    body.output-mode #mic-warn,
+    body.output-mode #width-pop,
+    body.output-mode #ratio-custom-pop,
+    body.output-mode #color-panel,
+    body.output-mode #debug-panel,
+    body.output-mode #drag-grip,
+    body.output-mode #safe-overlay,
+    body.output-mode #picker { display: none !important; }
 
     /* ── OBS chroma key ── */
     body.chromakey { background: #00ff00; }
@@ -596,23 +622,24 @@
     <h1>老老 Laolao</h1>
     <p>Select the camera to use for captions</p>
     <select id="cam-select"><option value="">Loading cameras…</option></select>
+    <p id="cam-hint">Connect a webcam, or check camera permissions in System Settings.</p>
     <button id="start-btn">Start</button>
   </div>
-</div>
 
-<!-- Draggable subtitle area -->
-<div id="stage-wrap">
-  <div id="drag-grip">
-    <div id="drag-grip-dots">
-      <span><i></i><i></i></span>
-      <span><i></i><i></i></span>
-      <span><i></i><i></i></span>
-      <span><i></i><i></i></span>
+  <!-- Draggable subtitle area (anchored to the visible viewport) -->
+  <div id="stage-wrap">
+    <div id="drag-grip">
+      <div id="drag-grip-dots">
+        <span><i></i><i></i></span>
+        <span><i></i><i></i></span>
+        <span><i></i><i></i></span>
+        <span><i></i><i></i></span>
+      </div>
+      <span id="drag-hint-text">drag</span>
+      <button id="drag-reset">↩ reset</button>
     </div>
-    <span id="drag-hint-text">drag</span>
-    <button id="drag-reset">↩ reset</button>
+    <div id="stage"></div>
   </div>
-  <div id="stage"></div>
 </div>
 
 <script>
@@ -621,14 +648,27 @@ const params     = new URLSearchParams(location.search);
 const FONT_SIZE  = params.get('fontsize') || '52';
 const BG_COLOR   = params.get('bg')       || 'rgba(0,0,0,0.72)';
 const WS_PORT    = params.get('port')     || '8765';
-const MAX_LINES  = parseInt(params.get('maxlines') || '3', 10);
-const FADE_MS    = parseInt(params.get('fadems')   || '4000', 10);
+const MAX_LINES  = parseInt(params.get('maxlines') || '1', 10);
+// Finals auto-fade after 25 s so stale text clears during long silences,
+// but never mid-conversation. fadems=0 disables auto-fade entirely.
+const FADE_MS    = parseInt(params.get('fadems')   || '25000', 10);
 const CHROMA_KEY = params.has('chromakey');
+// Output mode: this window is the hidden virtual-camera frame. Chrome-free,
+// un-mirrored, mic-less, and read-only on localStorage (the control window
+// owns all settings; we follow them via `storage` events).
+const IS_OUTPUT  = params.get('output') === '1';
 
 document.documentElement.style.setProperty('--font-size', FONT_SIZE + 'px');
 document.documentElement.style.setProperty('--bg', BG_COLOR);
 document.documentElement.style.setProperty('--fade-ms', FADE_MS + 'ms');
 if (CHROMA_KEY) document.body.classList.add('chromakey');
+if (IS_OUTPUT)  document.body.classList.add('output-mode');
+
+// Settings writes go through these so the output window never writes (its
+// stale copies would fight the control window via storage events).
+const _ls = window.localStorage;
+function store(key, val)  { if (!IS_OUTPUT) _ls.setItem(key, val); }
+function unstore(key)     { if (!IS_OUTPUT) _ls.removeItem(key); }
 
 // ─── Aspect ratio ──────────────────────────────────────────────
 const RATIO_KEY        = 'laolao_ratio';
@@ -656,7 +696,7 @@ function applyRatio(key) {
   document.querySelectorAll('.ratio-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.ratio === key);
   });
-  localStorage.setItem(RATIO_KEY, key);
+  store(RATIO_KEY, key);
 
   if (!r) {
     // Full window — remove all constraints
@@ -671,8 +711,10 @@ function applyRatio(key) {
   }
 
   // ── CSS approach (always works) ──
-  // Constrain viewport to the chosen ratio, centered in the window
-  document.body.style.background = '#111';
+  // Constrain viewport to the chosen ratio, centered in the window.
+  // Output frame gets pure black bars; the control window uses #111 so
+  // the user can tell the framed area from the window background.
+  document.body.style.background = IS_OUTPUT ? '#000' : '#111';
   document.body.style.display = 'flex';
   document.body.style.alignItems = 'center';
   document.body.style.justifyContent = 'center';
@@ -686,17 +728,8 @@ function applyRatio(key) {
   const cam = document.getElementById('camera');
   cam.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;';
 
-  // ── window.resizeTo() bonus (works only if window was opened via window.open) ──
-  const availW = window.screen.availWidth  - 40;
-  const availH = window.screen.availHeight - 40;
-  let w, h;
-  if (r.w / r.h <= availW / availH) { h = availH; w = Math.round(h * r.w / r.h); }
-  else                               { w = availW; h = Math.round(w * r.h / r.w); }
-  window.resizeTo(w, h);
-  window.moveTo(
-    Math.round((window.screen.availWidth  - w) / 2),
-    Math.round((window.screen.availHeight - h) / 2),
-  );
+  // No window.resizeTo() here: in Electron it resizes the BrowserWindow,
+  // which squashes the fixed 16:9 virtual-camera capture.
 }
 
 document.querySelectorAll('.ratio-btn').forEach(btn => {
@@ -708,7 +741,12 @@ document.querySelectorAll('.ratio-btn').forEach(btn => {
   });
 });
 
-// Restore saved ratio after page fully loads so camera element exists
+// Restore saved ratio after page fully loads so camera element exists.
+// The output window applies the SAME saved ratio as CSS letterboxing inside
+// its fixed 1280×720 frame — the OBS Camera Extension only delivers
+// 1280×720 buffers (verified: other sizes register but arrive blank), so
+// portrait/square are composed in-frame; phone viewers in fill mode crop
+// the side bars away. Ratio changes arrive live via the storage listener.
 window.addEventListener('load', () => {
   applyRatio(localStorage.getItem(RATIO_KEY) || 'free');
   requestAnimationFrame(updateSafeOverlay);
@@ -755,7 +793,7 @@ function applyCustomRatio() {
   const err = validateCustom(w, h);
   if (err) { rcErr.textContent = err; return; }
   rcErr.textContent = '';
-  localStorage.setItem(RATIO_CUSTOM_KEY, `${w}:${h}`);
+  store(RATIO_CUSTOM_KEY, `${w}:${h}`);
   // Update the Custom button label so the chosen ratio is visible
   document.getElementById('ratio-custom-btn').textContent = `${w}∶${h}`;
   applyRatio('custom');
@@ -827,7 +865,7 @@ function updateSafeOverlay() {
 function setSafeZone(on) {
   safeOverlay.classList.toggle('visible', on);
   safeBtn.classList.toggle('active', on);
-  localStorage.setItem(SAFE_KEY, on ? '1' : '0');
+  store(SAFE_KEY, on ? '1' : '0');
   if (on) requestAnimationFrame(updateSafeOverlay);
 }
 
@@ -859,7 +897,7 @@ function applyCaptionWidth(pct) {
   wpPresets.forEach(b => b.classList.toggle('active', +b.dataset.val === pct));
   // Activate the toolbar button when constrained below 100%
   widthBtn.classList.toggle('active', pct < 100);
-  localStorage.setItem(WIDTH_KEY, pct);
+  store(WIDTH_KEY, pct);
 }
 
 widthBtn.addEventListener('click', () => {
@@ -904,7 +942,7 @@ const langSelect  = document.getElementById('lang-select');
 
 function applyLanguage(lang, sendToServer = true) {
   langSelect.value = lang;
-  localStorage.setItem(LANG_KEY, lang);
+  store(LANG_KEY, lang);
   if (sendToServer && ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'set_language', language: lang }));
   }
@@ -941,7 +979,13 @@ async function populateCameras() {
     if (cam.deviceId === savedId) opt.selected = true;
     camSelect.appendChild(opt);
   });
-  if (!camSelect.options.length) camSelect.innerHTML = '<option value="">No cameras found</option>';
+  const camHint = document.getElementById('cam-hint');
+  if (!camSelect.options.length) {
+    camSelect.innerHTML = '<option value="">No cameras found</option>';
+    camHint.classList.add('visible');
+  } else {
+    camHint.classList.remove('visible');
+  }
 }
 
 async function startCamera(deviceId) {
@@ -950,7 +994,7 @@ async function startCamera(deviceId) {
     audio: false,
   });
   camVideo.srcObject = stream;
-  localStorage.setItem(SAVED_CAM_KEY, deviceId);
+  store(SAVED_CAM_KEY, deviceId);
   picker.classList.add('hidden');
 }
 
@@ -967,9 +1011,12 @@ const MIRROR_KEY = 'laolao_camera_mirror';
 const mirrorBtn  = document.getElementById('mirror-toggle');
 
 function applyMirror(on) {
-  document.body.classList.toggle('cam-mirror', on);
+  // Mirror is a self-view convenience only. The output window must never
+  // mirror: the far end has to see an un-mirrored world (text on shirts,
+  // signs behind you) exactly like a real camera transmits.
+  document.body.classList.toggle('cam-mirror', on && !IS_OUTPUT);
   mirrorBtn.classList.toggle('active', on);
-  localStorage.setItem(MIRROR_KEY, on ? '1' : '0');
+  store(MIRROR_KEY, on ? '1' : '0');
 }
 
 mirrorBtn.addEventListener('click', () => {
@@ -993,7 +1040,7 @@ function setToolbarHidden(hidden) {
   hideBtn.title = hidden
     ? 'Pin toolbar (hover top to peek)'
     : 'Hide toolbar (hover top to show)';
-  localStorage.setItem(HIDE_KEY, hidden ? '1' : '0');
+  store(HIDE_KEY, hidden ? '1' : '0');
 }
 
 hideBtn.addEventListener('click', () => {
@@ -1020,7 +1067,24 @@ toolbarEl.addEventListener('mouseleave', () => {
 // Restore on load
 setToolbarHidden(localStorage.getItem(HIDE_KEY) === '1');
 
+// Output mode: no picker UI — follow the control window's camera choice.
+// Retries cover boot races (camera busy, permission landing late) and the
+// "no camera chosen yet" case, resolved later via storage events.
+let outputCamRetry = null;
+function outputStartCamera() {
+  if (camVideo.srcObject) return;
+  clearTimeout(outputCamRetry);
+  const savedId = localStorage.getItem(SAVED_CAM_KEY);
+  // Never fall back to `video: true` here — the default device could be the
+  // OBS Virtual Camera itself (feedback loop). Wait for an explicit choice.
+  if (!savedId) return;
+  startCamera(savedId).catch(() => {
+    outputCamRetry = setTimeout(outputStartCamera, 5000);
+  });
+}
+
 async function init() {
+  if (IS_OUTPUT) { outputStartCamera(); return; }
   await populateCameras();
   const savedId = localStorage.getItem(SAVED_CAM_KEY);
   // Only auto-start if the saved camera is in the (filtered) list
@@ -1028,15 +1092,17 @@ async function init() {
     startCamera(savedId).catch(() => {});
   } else if (savedId) {
     // Saved camera was virtual or removed — clear it so user picks again
-    localStorage.removeItem(SAVED_CAM_KEY);
+    unstore(SAVED_CAM_KEY);
   }
 }
 init();
 
 // ─── Mic audio capture → WebSocket stream ─────────────────────
 // Captures mic at 16 kHz and sends raw int16 PCM binary frames to
-// server.py over the existing WebSocket. This lets Windows users grant
-// mic permission to Electron (the visible app) rather than python.exe.
+// server.py over the existing WebSocket. Used on every Electron platform:
+// mic permission goes to the visible app (not python), and Chromium's
+// echo canceller strips the far end's voice playing through the speakers
+// during a call, so remote speech doesn't get captioned as yours.
 
 let audioCtx = null;
 let micSource = null;
@@ -1052,7 +1118,10 @@ async function startMicStream() {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: {
       sampleRate: TARGET_SR,
       channelCount: 1,
-      echoCancellation: false,
+      // AEC is essential in-call: the remote voice plays through the
+      // speakers and would otherwise be captioned as local speech.
+      // NS/AGC stay off — Whisper prefers unprocessed speech.
+      echoCancellation: true,
       noiseSuppression: false,
       autoGainControl: false,
     }, video: false });
@@ -1092,27 +1161,45 @@ function stopMicStream() {
 }
 
 // ─── Draggable subtitle stage ──────────────────────────────────
+// Positions are viewport-relative: stored as fractions of the visible
+// #viewport box and applied as percentages, so captions stay inside the
+// framed area across ratio changes and window resizes (never in the
+// pillarbox bars, matching the width slider and safe zones).
 const stageWrap = document.getElementById('stage-wrap');
 const dragGrip  = document.getElementById('drag-grip');
 const dragReset = document.getElementById('drag-reset');
-const STAGE_POS_KEY = 'laolao_stage_pos';
+const STAGE_POS_KEY = 'laolao_stage_pos_v2';
+unstore('laolao_stage_pos');   // old window-relative scheme
 
 let dragging = false, dragStartX = 0, dragStartY = 0, wrapStartX = 0, wrapStartY = 0;
 
-function toFixed() {
-  const r = stageWrap.getBoundingClientRect();
+// Convert the current position (default bottom/left or % values) to px
+// relative to the viewport so drag deltas can be applied directly.
+function toViewportPx() {
+  const r  = stageWrap.getBoundingClientRect();
+  const vp = viewport.getBoundingClientRect();
   stageWrap.style.bottom = 'auto';
-  stageWrap.style.left   = r.left + 'px';
-  stageWrap.style.top    = r.top  + 'px';
+  stageWrap.style.left   = (r.left - vp.left) + 'px';
+  stageWrap.style.top    = (r.top  - vp.top)  + 'px';
+}
+
+function applyPos(p) {
+  stageWrap.style.bottom = 'auto';
+  stageWrap.style.left   = (p.left * 100) + '%';
+  stageWrap.style.top    = (p.top  * 100) + '%';
+  dragReset.classList.add('visible');
 }
 
 function savePos() {
-  const r = stageWrap.getBoundingClientRect();
-  localStorage.setItem(STAGE_POS_KEY, JSON.stringify({
-    left: r.left / window.innerWidth,
-    top:  r.top  / window.innerHeight,
-  }));
-  dragReset.classList.add('visible');
+  const r  = stageWrap.getBoundingClientRect();
+  const vp = viewport.getBoundingClientRect();
+  if (!vp.width || !vp.height) return;
+  const p = {
+    left: Math.min(0.95, Math.max(0, (r.left - vp.left) / vp.width)),
+    top:  Math.min(0.95, Math.max(0, (r.top  - vp.top)  / vp.height)),
+  };
+  store(STAGE_POS_KEY, JSON.stringify(p));
+  applyPos(p);   // switch back to % so the position tracks viewport resizes
 }
 
 function restorePos() {
@@ -1120,19 +1207,13 @@ function restorePos() {
   if (!raw) return;
   try {
     const p = JSON.parse(raw);
-    const left = p.left * window.innerWidth;
-    const top  = p.top  * window.innerHeight;
-    // Discard clearly off-screen saved positions (from old buggy sessions)
-    if (left < -200 || left > window.innerWidth + 200 ||
-        top  < -200 || top  > window.innerHeight + 200) {
-      localStorage.removeItem(STAGE_POS_KEY);
+    if (typeof p.left !== 'number' || typeof p.top !== 'number' ||
+        p.left < 0 || p.left > 1 || p.top < 0 || p.top > 1) {
+      unstore(STAGE_POS_KEY);
       return;
     }
-    stageWrap.style.bottom = 'auto';
-    stageWrap.style.left   = left + 'px';
-    stageWrap.style.top    = top  + 'px';
-    dragReset.classList.add('visible');
-  } catch { localStorage.removeItem(STAGE_POS_KEY); }
+    applyPos(p);
+  } catch { unstore(STAGE_POS_KEY); }
 }
 
 // Only the grip initiates drag
@@ -1142,7 +1223,7 @@ dragGrip.addEventListener('pointerdown', e => {
   dragging = true;
   dragGrip.setPointerCapture(e.pointerId);
   stageWrap.classList.add('dragging');
-  if (!stageWrap.style.top) toFixed();
+  toViewportPx();
   dragStartX = e.clientX; dragStartY = e.clientY;
   wrapStartX = parseFloat(stageWrap.style.left) || 0;
   wrapStartY = parseFloat(stageWrap.style.top)  || 0;
@@ -1163,11 +1244,8 @@ dragGrip.addEventListener('pointerup', () => {
 
 dragReset.addEventListener('click', e => {
   e.stopPropagation();
-  stageWrap.style.cssText = '';
-  stageWrap.style.position = 'fixed';
-  stageWrap.style.bottom = '60px';
-  stageWrap.style.left = '5%';
-  localStorage.removeItem(STAGE_POS_KEY);
+  stageWrap.style.cssText = '';   // fall back to CSS default: 5% / 60px in-viewport
+  unstore(STAGE_POS_KEY);
   dragReset.classList.remove('visible');
 });
 
@@ -1184,8 +1262,12 @@ function createLine(text, isPartial) {
   return el;
 }
 
-function addFinalLine(text) {
+function clearPartial() {
   if (partialEl) { stage.removeChild(partialEl); partialEl = null; }
+}
+
+function addFinalLine(text) {
+  clearPartial();
   const el = createLine(text, false);
   stage.appendChild(el);
   while (finalLines.length >= MAX_LINES) {
@@ -1193,7 +1275,9 @@ function addFinalLine(text) {
     clearTimeout(oldest.fadeTimer);
     if (oldest.el.parentNode) stage.removeChild(oldest.el);
   }
-  finalLines.push({ el, fadeTimer: setTimeout(() => fadeLine(el), FADE_MS) });
+  // FADE_MS=0 → no auto-fade; line stays until pushed out by MAX_LINES.
+  const fadeTimer = FADE_MS > 0 ? setTimeout(() => fadeLine(el), FADE_MS) : null;
+  finalLines.push({ el, fadeTimer });
 }
 
 function fadeLine(el) {
@@ -1408,20 +1492,20 @@ function applyBg() {
 
 cpFinal.addEventListener('input', () => {
   document.documentElement.style.setProperty('--color-final', cpFinal.value);
-  localStorage.setItem(COLOR_KEYS.final, cpFinal.value);
+  store(COLOR_KEYS.final, cpFinal.value);
 });
 cpPartial.addEventListener('input', () => {
   document.documentElement.style.setProperty('--color-partial', cpPartial.value);
-  localStorage.setItem(COLOR_KEYS.partial, cpPartial.value);
+  store(COLOR_KEYS.partial, cpPartial.value);
 });
 cpBg.addEventListener('input', () => {
   applyBg();
-  localStorage.setItem(COLOR_KEYS.bg, cpBg.value);
+  store(COLOR_KEYS.bg, cpBg.value);
 });
 cpBgOpacity.addEventListener('input', () => {
   cpBgOpacityVal.textContent = cpBgOpacity.value + '%';
   applyBg();
-  localStorage.setItem(COLOR_KEYS.opacity, cpBgOpacity.value);
+  store(COLOR_KEYS.opacity, cpBgOpacity.value);
 });
 
 cpResetAll.addEventListener('click', () => {
@@ -1433,7 +1517,7 @@ cpResetAll.addEventListener('click', () => {
   document.documentElement.style.setProperty('--color-final',   COLOR_DEFAULTS.final);
   document.documentElement.style.setProperty('--color-partial',  COLOR_DEFAULTS.partial);
   applyBg();
-  Object.values(COLOR_KEYS).forEach(k => localStorage.removeItem(k));
+  Object.values(COLOR_KEYS).forEach(k => unstore(k));
 });
 
 // Restore saved colors on load
@@ -1449,6 +1533,56 @@ cpResetAll.addEventListener('click', () => {
   if (bg || op) applyBg();
 })();
 
+// ─── Output-mode settings sync ─────────────────────────────────
+// The two windows share localStorage (same file:// origin). The control
+// window writes settings; the output window follows them live via storage
+// events so what the far end sees always matches the self-view.
+function syncColorsFromStorage() {
+  const fin = localStorage.getItem(COLOR_KEYS.final)   || COLOR_DEFAULTS.final;
+  const par = localStorage.getItem(COLOR_KEYS.partial) || COLOR_DEFAULTS.partial;
+  const bg  = localStorage.getItem(COLOR_KEYS.bg)      || COLOR_DEFAULTS.bg;
+  const op  = localStorage.getItem(COLOR_KEYS.opacity) || String(COLOR_DEFAULTS.opacity);
+  document.documentElement.style.setProperty('--color-final',   fin);
+  document.documentElement.style.setProperty('--color-partial', par);
+  cpBg.value = bg;
+  cpBgOpacity.value = op;
+  applyBg();
+}
+
+if (IS_OUTPUT) {
+  window.addEventListener('storage', e => {
+    if (!e.key) return;   // localStorage.clear()
+    switch (e.key) {
+      case SAVED_CAM_KEY: {
+        // Camera switched in the control window — restart the feed.
+        const s = camVideo.srcObject;
+        if (s) { s.getTracks().forEach(t => t.stop()); camVideo.srcObject = null; }
+        outputStartCamera();
+        break;
+      }
+      case WIDTH_KEY:
+        applyCaptionWidth(e.newValue || '100');
+        break;
+      case STAGE_POS_KEY:
+        if (e.newValue) restorePos();
+        else stageWrap.style.cssText = '';   // reset → CSS default position
+        break;
+      case RATIO_KEY:
+      case RATIO_CUSTOM_KEY:
+        // Ratio changed in the control window — re-letterbox the output
+        // frame, then re-derive the caption pixel width for the new box.
+        applyRatio(localStorage.getItem(RATIO_KEY) || 'free');
+        break;
+      case COLOR_KEYS.final:
+      case COLOR_KEYS.partial:
+      case COLOR_KEYS.bg:
+      case COLOR_KEYS.opacity:
+        syncColorsFromStorage();
+        break;
+    }
+  });
+}
+
 // ─── WebSocket ─────────────────────────────────────────────────
 let ws = null, reconnectDelay = 1000;
 
@@ -1461,13 +1595,18 @@ function connect() {
     wsReconnects++;
     setVal('db-ws-status', '● Connected', 'good');
     setVal('db-reconnects', wsReconnects);
-    // Sync saved language to server on reconnect
-    applyLanguage(localStorage.getItem(LANG_KEY) || 'zh', true);
-    // On Windows inside Electron, stream mic audio directly over WebSocket
-    // so python.exe never needs mic permission from the OS.
-    if (window.electronAPI?.platform === 'win32') startMicStream();
-    // Start mic-warning timer on connect — fires if no audio signal after 15 s
-    scheduleMicWarn();
+    // The control window owns the server conversation: language sync, mic
+    // streaming, and the mic warning. The output window is display-only —
+    // a second mic stream would double-feed audio and double the captions.
+    if (!IS_OUTPUT) {
+      // Sync saved language to server on reconnect
+      applyLanguage(localStorage.getItem(LANG_KEY) || 'zh', true);
+      // Inside Electron (all platforms), stream mic audio over the WebSocket —
+      // python runs --no-mic and Chromium provides echo cancellation.
+      if (window.electronAPI) startMicStream();
+      // Start mic-warning timer on connect — fires if no audio signal after 15 s
+      scheduleMicWarn();
+    }
   };
 
   ws.onmessage = (ev) => {
@@ -1476,17 +1615,20 @@ function connect() {
 
     if (msg.type === 'stats') { updateDebugStats(msg); return; }
     if (msg.type === 'level') { updateLevel(msg); return; }
+    // Server rejected/emptied the utterance — drop the lingering partial.
+    if (msg.type === 'clear_partial') { clearPartial(); return; }
+    if (msg.type === 'clear') {
+      clearPartial();
+      finalLines.forEach(l => { clearTimeout(l.fadeTimer); stage.removeChild(l.el); });
+      finalLines = [];
+      return;
+    }
 
     const text = (msg.text || '').trim();
     if (!text) return;
 
     if      (msg.type === 'partial') setPartial(text);
     else if (msg.type === 'final')   addFinalLine(text);
-    else if (msg.type === 'clear') {
-      if (partialEl) { stage.removeChild(partialEl); partialEl = null; }
-      finalLines.forEach(l => { clearTimeout(l.fadeTimer); stage.removeChild(l.el); });
-      finalLines = [];
-    }
   };
 
   ws.onerror = e => console.warn('[laolao] WS error', e);
