@@ -1224,36 +1224,48 @@ async function populateCameras() {
   }
 }
 
-async function startCamera(deviceId) {
-  diagLog(`startCamera: requesting device=${deviceId ? deviceId.slice(0, 8) + '…' : '(default)'}`);
+// ─── Camera open with a format-negotiation ladder ──────────────
+// Some UVC webcams (the EMEET C950 4K) hand Chromium a "live" track that
+// delivers ZERO frames at a given resolution/rate — Chromium negotiates an
+// uncompressed pixel format the USB link can't sustain, so nothing arrives
+// (videoWidth stays 0 and the track mutes). ffmpeg opens the same camera fine
+// because it picks MJPEG. getUserMedia can't request a codec, but different
+// (resolution, frame-rate) constraints make Chromium negotiate different
+// formats — so on "no frames" we retry DOWN this ladder instead of reopening
+// the identical failing format. The last rung is unconstrained: let the camera
+// offer its own default (usually MJPEG).
+const CAM_CONSTRAINT_LADDER = [
+  { name: '720p30', video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } } },
+  { name: '720p15', video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 15 } } },
+  { name: '480p30', video: { width: { ideal: 640 },  height: { ideal: 480 }, frameRate: { ideal: 30 } } },
+  { name: 'default', video: {} },
+];
+
+async function startCamera(deviceId, level = 0) {
+  const lv = Math.min(level, CAM_CONSTRAINT_LADDER.length - 1);
+  const rung = CAM_CONSTRAINT_LADDER[lv];
+  diagLog(`startCamera: device=${deviceId ? deviceId.slice(0, 8) + '…' : '(default)'} format=${rung.name}`);
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      // Cap at 720p: the output frame is 720p anyway, and both windows open
-      // this camera. Letting a 4K webcam negotiate full resolution twice can
-      // exceed USB bandwidth — the losing stream then delivers black frames.
-      video: {
-        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
-        width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 },
-      },
+      video: { ...(deviceId ? { deviceId: { exact: deviceId } } : {}), ...rung.video },
       audio: false,
     });
   } catch (e) {
-    diagLog(`startCamera: getUserMedia FAILED ${e.name}: ${e.message}`);
-    throw e;
+    diagLog(`startCamera: getUserMedia FAILED ${e.name}: ${e.message} (format=${rung.name})`);
+    // Unsatisfiable constraints (OverconstrainedError) → try the next rung.
+    if (lv < CAM_CONSTRAINT_LADDER.length - 1) return startCamera(deviceId, lv + 1);
+    releaseCamera(); onCameraGaveUp(); return;
   }
   const tr = stream.getVideoTracks()[0];
   const s  = tr ? tr.getSettings() : {};
   diagLog(`startCamera: got stream label="${tr && tr.label}" `
     + `${s.width}x${s.height}@${s.frameRate} state=${tr && tr.readyState}`);
-  // A track that mutes shortly after opening is delivering no frames — the
-  // EMEET-vs-Chromium wedge. Treat a mute that persists >1.5s as failure.
+  // A track that mutes shortly after opening is delivering no frames.
   tr && tr.addEventListener('mute', () => {
     diagLog('track MUTED (no frames)');
     setTimeout(() => {
-      if (camVideo.srcObject === stream && tr.muted) {
-        restartCamera(deviceId, 'track muted — no frames');
-      }
+      if (camVideo.srcObject === stream && tr.muted) advanceCamera(deviceId, lv, 'track muted');
     }, 1500);
   });
   tr && tr.addEventListener('unmute', () => diagLog('track unmuted (frames flowing)'));
@@ -1262,23 +1274,36 @@ async function startCamera(deviceId) {
     `video playing ${camVideo.videoWidth}x${camVideo.videoHeight}`), { once: true });
   store(SAVED_CAM_KEY, deviceId);
   picker.classList.add('hidden');
-  watchCamera(deviceId, stream);
+  watchCamera(deviceId, stream, lv);
 }
 
-// ─── Camera black-frame watchdog ───────────────────────────────
-// USB webcams can wedge after rapid open/close cycles (e.g. the app is
-// relaunched while the previous instance still holds the device):
-// getUserMedia succeeds but every frame is pure black. Real sensors always
-// produce noise, so a frame whose every sampled pixel is exactly 0 is a
-// wedged device, not a dark room. Sample a few seconds after start; on
-// pure black, tear the stream down and reopen it (bounded retries).
 let camWatchTimers = [];
-let camRestarts    = 0;
-// One gentle retry only. Hammering a UVC camera that returns a live-but-empty
-// track (EMEET C950 does this to Chromium) keeps it wedged — the churn is the
-// problem, not the cure. After this we hand control to the user (pick another
-// camera / replug), which recovers reliably.
-const CAM_RESTART_MAX = 1;
+
+// Stop the physical device so OTHER apps (Google Meet, FaceTime) can use it.
+// A single-consumer camera lock that outlives a failed capture would hold the
+// webcam hostage — every other app is then blocked from it. Always release.
+function releaseCamera() {
+  const s = camVideo.srcObject;
+  if (s) { s.getTracks().forEach(t => t.stop()); camVideo.srcObject = null; }
+  camWatchTimers.forEach(clearTimeout);
+  camWatchTimers = [];
+}
+
+function onCameraGaveUp() {
+  diagLog('camera: ladder exhausted — released device, handing off to user');
+  // The output window has no UI; relay to the control window's picker.
+  if (IS_OUTPUT) window.electronAPI?.reportCameraFailed?.();
+  else showCameraFailedPicker();
+}
+
+// Drop to the next format down the ladder; release + hand off if exhausted.
+function advanceCamera(deviceId, level, why) {
+  releaseCamera();   // stop the current failing stream first (frees the device)
+  if (level >= CAM_CONSTRAINT_LADDER.length - 1) { onCameraGaveUp(); return; }
+  const next = level + 1;
+  diagLog(`advanceCamera: ${why} — retry as ${CAM_CONSTRAINT_LADDER[next].name}`);
+  setTimeout(() => startCamera(deviceId, next).catch(() => {}), 1200);
+}
 
 function frameIsPureBlack() {
   if (!camVideo.videoWidth) return false;   // no frame decoded yet — not proof
@@ -1300,45 +1325,23 @@ function showCameraFailedPicker() {
   picker.classList.remove('hidden');
 }
 
-function restartCamera(deviceId, why) {
-  if (camRestarts >= CAM_RESTART_MAX) {
-    // Out of retries — don't sit on a black frame. The output window has no
-    // UI, so it relays the failure to the control window over IPC; the
-    // standalone self-view reopens its own picker with a hint (e.g.
-    // lid-closed built-in camera, wedged USB cam).
-    if (IS_OUTPUT) window.electronAPI?.reportCameraFailed?.();
-    else showCameraFailedPicker();
-    return;
-  }
-  camRestarts++;
-  diagLog(`restartCamera: ${why} (attempt ${camRestarts}/${CAM_RESTART_MAX})`);
-  const s = camVideo.srcObject;
-  if (s) { s.getTracks().forEach(t => t.stop()); camVideo.srcObject = null; }
-  // Longer pause so the device fully releases before we reopen — a fast
-  // reopen is what wedges it.
-  setTimeout(() => startCamera(deviceId).catch(() => {}), 1500);
-}
-
-function watchCamera(deviceId, stream) {
+function watchCamera(deviceId, stream, level) {
   camWatchTimers.forEach(clearTimeout);
-  camWatchTimers = [3000, 8000, 15000].map(ms => setTimeout(() => {
+  // One decisive check at 3.5s: a healthy open delivers frames well within it
+  // (ffmpeg does ~250ms). videoWidth still 0, or pure-black pixels, means this
+  // format is dead → drop to the next rung.
+  camWatchTimers = [setTimeout(() => {
     if (camVideo.srcObject !== stream) return;
-    // videoWidth 0 this long after start = the device never delivered a
-    // frame (fully wedged); pure black = frames arriving but dead sensor.
     const black = camVideo.videoWidth ? frameIsPureBlack() : null;
-    diagLog(`watchdog @${ms}ms: videoW=${camVideo.videoWidth} `
-      + `videoH=${camVideo.videoHeight} black=${black} restarts=${camRestarts}`);
-    if (camVideo.videoWidth === 0) {
-      restartCamera(deviceId, 'delivered no frames');
-    } else if (black) {
-      restartCamera(deviceId, 'delivering pure-black frames');
-    } else {
-      camRestarts = 0;   // healthy frame seen — future wedges get fresh retries
-    }
-  }, ms));
-  // OS revoked the device or it was unplugged/reclaimed
+    diagLog(`watchdog @3500ms: videoW=${camVideo.videoWidth} videoH=${camVideo.videoHeight} `
+      + `black=${black} format=${CAM_CONSTRAINT_LADDER[level].name}`);
+    if (camVideo.videoWidth === 0) advanceCamera(deviceId, level, 'no frames');
+    else if (black)                advanceCamera(deviceId, level, 'black frames');
+    // else healthy — leave it running.
+  }, 3500)];
+  // OS revoked the device or it was unplugged/reclaimed mid-stream.
   stream.getVideoTracks().forEach(tr => tr.addEventListener('ended', () => {
-    if (camVideo.srcObject === stream) restartCamera(deviceId, 'track ended');
+    if (camVideo.srcObject === stream) advanceCamera(deviceId, level, 'track ended');
   }));
 }
 
@@ -1998,10 +2001,8 @@ if (IS_OUTPUT) {
       case SAVED_CAM_KEY:
       case CAM_RETRY_KEY: {
         // Camera switched (or explicitly retried) in the control window —
-        // fresh retry budget, then restart the feed.
-        camRestarts = 0;
-        const s = camVideo.srcObject;
-        if (s) { s.getTracks().forEach(t => t.stop()); camVideo.srcObject = null; }
+        // release the current device and reopen from the top of the ladder.
+        releaseCamera();
         outputStartCamera();
         break;
       }
