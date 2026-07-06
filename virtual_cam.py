@@ -52,7 +52,9 @@ def recv_exact(conn: socket.socket, n: int) -> bytes:
 
 
 def jpeg_to_rgb(jpeg: bytes) -> np.ndarray:
-    img = Image.open(io.BytesIO(jpeg)).convert('RGB').resize((WIDTH, HEIGHT), Image.BILINEAR)
+    img = Image.open(io.BytesIO(jpeg)).convert('RGB')
+    if img.size != (WIDTH, HEIGHT):
+        img = img.resize((WIDTH, HEIGHT), Image.BILINEAR)
     return np.asarray(img, dtype=np.uint8)
 
 
