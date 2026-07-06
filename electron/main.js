@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, session, shell, systemPreferences } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, screen, session, shell, systemPreferences } = require('electron');
 const { spawn, execSync }                      = require('child_process');
 const path = require('path');
 const fs   = require('fs');
@@ -489,9 +489,16 @@ app.whenReady().then(async () => {
   }
 
   // Control window: toolbar + mirrored self-view. Never captured.
+  // Electron centers new windows on whichever display has the mouse; on a
+  // multi-display setup that can put the window off the screen the user is
+  // looking at (reported as "the app opens to a black screen"). Pin it to
+  // the primary display instead.
+  const workArea = screen.getPrimaryDisplay().workArea;
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 720,
+    x: workArea.x + Math.max(0, Math.round((workArea.width  - 1280) / 2)),
+    y: workArea.y + Math.max(0, Math.round((workArea.height - 720) / 2)),
     title: '老老 Laolao',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
