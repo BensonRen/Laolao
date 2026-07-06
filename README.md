@@ -67,7 +67,7 @@ Until then, build from source in under 5 minutes — see **Quick Start** below.
 - macOS 13 Ventura or later (Apple Silicon recommended)
 - Python 3.10+ (`brew install python@3.12`)
 - [OBS Studio 28+](https://obsproject.com/) installed (does **not** need to be running)
-- A microphone
+- A camera and a microphone (grant both when macOS prompts on first launch)
 
 ### Windows
 - Windows 10 or 11
@@ -110,6 +110,19 @@ npm install
 npm run build -- --mac dir    # → ../dist/mac-arm64/Laolao.app
 ```
 
+The build signs the app with the camera + microphone entitlements
+(`build/entitlements.mac.plist`) — these are **required**: under macOS's
+hardened runtime, an app without the camera entitlement can open the webcam
+but receives zero frames (a silent black screen). If a build ever fails at
+the `codesign` step (its per-file network timestamp can flake), re-sign the
+produced bundle without a timestamp:
+
+```bash
+codesign --deep --force --options runtime \
+  --entitlements build/entitlements.mac.plist \
+  --sign <your-signing-identity> ../dist/mac-arm64/Laolao.app
+```
+
 ### 5. Install and launch
 
 ```bash
@@ -117,7 +130,10 @@ ditto ../dist/mac-arm64/Laolao.app /Applications/Laolao.app
 open /Applications/Laolao.app
 ```
 
-On first launch macOS will prompt for **microphone access** — grant it. No admin password is needed: the virtual camera driver comes from OBS Studio itself (installed in step 1). If OBS is missing, Laolao shows a dialog pointing at the download page and runs in captions-only mode.
+On first launch macOS prompts for **camera and microphone access** — grant
+both. No admin password is needed: the virtual camera driver comes from OBS
+Studio itself (installed in step 1). If OBS is missing, Laolao shows a dialog
+pointing at the download page and runs in captions-only mode.
 
 ### 6. Select the camera in your call app
 
@@ -282,21 +298,31 @@ Laolao.app  (Electron)
 │   ├── spawns server.py --no-mic   ← Python WebSocket + Whisper
 │   ├── spawns virtual_cam.py       ← pyvirtualcam → OBS driver
 │   ├── control window              ← overlay/index.html (what YOU see)
-│   └── output window (hidden)      ← overlay/index.html?output=1 (what THEY see)
+│   └── output window (offscreen)   ← overlay/index.html?output=1 (what THEY see)
 │
-├── control window — toolbar, panels, mirrored self-view, mic capture.
-│   NEVER captured: your controls can't leak into the call.
-│
-├── output window — chrome-free, un-mirrored, exactly 1280×720.
+├── output window — the SOLE camera consumer. Opens the webcam once
+│   (getUserMedia), composes camera + captions, chrome-free, un-mirrored,
+│   exactly 1280×720. Kept transparent/offscreen but "visible" to Chromium
+│   so the camera keeps delivering frames.
 │   capturePage() @ 30 fps → JPEG → TCP :8766 → virtual_cam.py
 │                                                    ↓
 │                                    OBS Camera Extension (Mac)
 │                                    OBS VirtualCam DirectShow (Windows)
 │                                          (what Zoom sees)
 │
+├── control window — toolbar, panels, mic capture, and a live PREVIEW of
+│   the output frames over IPC (not its own camera). Your self-view is
+│   literally what the far end sees. NEVER captured, so your controls
+│   can't leak into the call.
+│
 └── settings sync: both windows share localStorage — camera, colors,
     caption position/width, ratio all mirror live into the output frame
 ```
+
+Only **one** window ever opens the webcam. Opening the same camera twice
+starves some USB webcams into black frames, and macOS gives a physical
+camera to one app at a time — so a single consumer keeps the feed reliable
+and, if capture ever fails, the device is released for other apps.
 
 **Audio (unified path):** the control window captures your mic with
 `getUserMedia` and **echo cancellation on**, then streams raw PCM to
@@ -356,6 +382,16 @@ portrait view.
 - That's the aspect-ratio letterbox: you picked 9:16 / 4:3 / 1:1 in the toolbar, and the camera itself is always 1280×720 (a hard OBS Camera Extension limit)
 - Phone viewers in fill mode crop the bars automatically — the far end on a phone sees the full-height portrait view
 - Pick "Full" in the toolbar to fill the whole 16:9 frame
+
+**Camera "in use" but the app shows a black screen**
+- Almost always a macOS permission/signing issue, not a broken camera. Under the hardened runtime the app **must** be signed with the camera entitlement (`build/entitlements.mac.plist`) — without it, macOS opens the device (the green in-use light comes on) but delivers zero frames. A stock `npm run build` includes it; if you re-signed the app yourself, keep the entitlements.
+- Grant camera access when prompted (System Settings → Privacy & Security → Camera → enable Laolao). If permission got into a bad state after rebuilding, reset it: `tccutil reset Camera com.laolao.app`, then relaunch.
+- Every step of the camera pipeline is logged to `~/laolao-camera-debug.log` (truncated each launch) — `startCamera`, whether frames arrive, `black=true/false`. Attach it when filing a camera bug.
+- A wedged USB webcam (e.g. after force-quitting the app repeatedly) can deliver a "live" track with no frames — the app walks a resolution ladder, then reopens the camera picker asking you to replug the USB or pick another camera.
+
+**Another app (Google Meet, FaceTime) can't use my camera**
+- While Laolao is running and actively capturing, it holds the physical camera — pick **"OBS Virtual Camera"** in the other app to see your Laolao feed (with captions) instead of the raw camera
+- If Laolao's own capture fails it now **releases** the device, so other apps can use the raw camera directly; fully quitting Laolao always frees it
 
 **Laolao and OBS both need the virtual camera**
 - Only one app can use "OBS Virtual Camera" at a time
