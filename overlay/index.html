@@ -59,7 +59,10 @@
        ratio modes. Positioned so #stage-wrap/#safe-overlay anchor to it. */
     #viewport { position: fixed; inset: 0; }
     #camera { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    /* Mirror flips the caption stage too, so the self-view is a consistent
+       mirror image (video + text together). Output mode never mirrors. */
     body.cam-mirror #camera { transform: scaleX(-1); }
+    body.cam-mirror #stage  { transform: scaleX(-1); }
 
     /* ── Camera picker ── */
     #picker {
