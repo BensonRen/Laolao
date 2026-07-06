@@ -64,6 +64,26 @@
     body.cam-mirror #camera { transform: scaleX(-1); }
     body.cam-mirror #stage  { transform: scaleX(-1); }
 
+    /* ── Electron control window: preview of the output frames ──
+       Only the hidden output window opens the webcam (USB cams like the
+       EMEET C950 wedge/black out when two windows hold them at once). The
+       control window shows the composed output frames instead — a true
+       WYSIWYG self-view, captions included. object-fit: cover crops the
+       frame's in-frame letterbox bars so the ratio-shaped #viewport shows
+       exactly the content box and drag/width fractions keep mapping 1:1. */
+    #preview { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; display: none; }
+    body.electron-control #preview { display: block; }
+    body.electron-control #camera  { display: none; }
+    body.cam-mirror #preview { transform: scaleX(-1); }
+    #preview-wait {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      color: #9a9aa0; font-size: 15px; letter-spacing: 0.04em;
+      font-family: 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
+      background: rgba(0,0,0,0.5); padding: 10px 18px; border-radius: 10px;
+      display: none; z-index: 5; white-space: nowrap;
+    }
+    #preview-wait.visible { display: block; }
+
     /* ── Camera picker ── */
     #picker {
       position: fixed; inset: 0;
@@ -548,6 +568,8 @@
     body.output-mode #drag-grip,
     body.output-mode #safe-overlay,
     body.output-mode #onboard,
+    body.output-mode #preview,
+    body.output-mode #preview-wait,
     body.output-mode #picker { display: none !important; }
 
     /* ── OBS chroma key ── */
@@ -693,6 +715,8 @@
 <!-- Camera -->
 <div id="viewport">
   <video id="camera" autoplay playsinline muted></video>
+  <img id="preview" alt="">
+  <div id="preview-wait" data-i18n="preview_wait">Waiting for output frames…</div>
   <div id="safe-overlay">
     <div class="safe-rect square" id="safe-square"><span class="safe-label">1∶1 square</span></div>
     <div class="safe-rect phone"  id="safe-phone"><span class="safe-label">9∶16 phone</span></div>
@@ -757,6 +781,12 @@ document.documentElement.style.setProperty('--fade-ms', FADE_MS + 'ms');
 if (CHROMA_KEY) document.body.classList.add('chromakey');
 if (IS_OUTPUT)  document.body.classList.add('output-mode');
 
+// Electron control window: the output window is the ONLY camera consumer
+// (dual getUserMedia wedges USB cams — EMEET C950 delivers black frames).
+// This window previews the composed output frames over IPC instead.
+const IS_ELECTRON_CONTROL = !!window.electronAPI && !IS_OUTPUT;
+if (IS_ELECTRON_CONTROL) document.body.classList.add('electron-control');
+
 // Settings writes go through these so the output window never writes (its
 // stale copies would fight the control window via storage events).
 const _ls = window.localStorage;
@@ -796,6 +826,7 @@ const I18N = {
     btn_start: '开始', cams_denied: '摄像头权限被拒绝', cams_none: '未找到摄像头',
     camera_n: '摄像头 ', cam_start_fail: '无法启动摄像头：',
     cam_black: '摄像头没有画面 — 请换一个摄像头试试。',
+    preview_wait: '等待输出画面…',
     cp_final: '正式字幕颜色', cp_partial: '临时字幕颜色', cp_bg: '背景',
     cp_opacity: '不透明度', cp_reset: '恢复默认',
     drag_hint: '拖动', drag_reset: '↩ 复位',
@@ -831,6 +862,7 @@ const I18N = {
     btn_start: 'Start', cams_denied: 'Camera permission denied', cams_none: 'No cameras found',
     camera_n: 'Camera ', cam_start_fail: 'Could not start camera: ',
     cam_black: 'The camera shows no picture — try a different one.',
+    preview_wait: 'Waiting for output frames…',
     cp_final: 'Final text', cp_partial: 'Partial text', cp_bg: 'Background',
     cp_opacity: 'Opacity', cp_reset: 'Reset to defaults',
     drag_hint: 'drag', drag_reset: '↩ reset',
@@ -901,6 +933,8 @@ function applyRatio(key) {
     viewport.style.cssText = 'position:fixed;inset:0;';
     const cam = document.getElementById('camera');
     cam.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;object-fit:cover;';
+    document.getElementById('preview').style.cssText =
+      'position:fixed;inset:0;width:100%;height:100%;object-fit:cover;';
     return;
   }
 
@@ -921,6 +955,10 @@ function applyRatio(key) {
 
   const cam = document.getElementById('camera');
   cam.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;';
+  // Preview mirrors the camera styling; cover crops the output frame's
+  // in-frame letterbox bars so the ratio viewport shows just the content.
+  document.getElementById('preview').style.cssText =
+    'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;';
 
   // No window.resizeTo() here: in Electron it resizes the BrowserWindow,
   // which squashes the fixed 16:9 virtual-camera capture.
@@ -1189,15 +1227,23 @@ const startBtn  = document.getElementById('start-btn');
 const SAVED_CAM_KEY = 'laolao_camera_id';
 
 async function populateCameras() {
-  let tmp;
-  try { tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); }
-  catch {
-    camSelect.innerHTML = '';
-    camSelect.appendChild(new Option(t('cams_denied'), ''));
-    return;
+  // Labels are available without opening a stream once camera permission is
+  // granted (always true in Electron). Only fall back to a brief temp stream
+  // when labels are missing — avoids even a momentary second consumer on a
+  // USB camera the output window is holding.
+  let devices = await navigator.mediaDevices.enumerateDevices();
+  const haveLabels = devices.some(d => d.kind === 'videoinput' && d.label);
+  if (!haveLabels) {
+    let tmp;
+    try { tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); }
+    catch {
+      camSelect.innerHTML = '';
+      camSelect.appendChild(new Option(t('cams_denied'), ''));
+      return;
+    }
+    devices = await navigator.mediaDevices.enumerateDevices();
+    tmp.getTracks().forEach(t => t.stop());
   }
-  const devices = await navigator.mediaDevices.enumerateDevices();
-  tmp.getTracks().forEach(t => t.stop());
   camSelect.innerHTML = '';
   const savedId = localStorage.getItem(SAVED_CAM_KEY);
   const VIRTUAL_RE = /virtual|obs|snap camera|mmhmm|camo|droid|ivcam|e2esoftware/i;
@@ -1262,17 +1308,21 @@ function frameIsPureBlack() {
   return true;
 }
 
+function showCameraFailedPicker() {
+  const hint = document.getElementById('cam-hint');
+  hint.textContent = t('cam_black');
+  hint.classList.add('visible');
+  picker.classList.remove('hidden');
+}
+
 function restartCamera(deviceId, why) {
   if (camRestarts >= CAM_RESTART_MAX) {
-    // Out of retries — don't sit on a black frame. In the control window,
-    // reopen the picker with a hint so the user can switch cameras (e.g.
+    // Out of retries — don't sit on a black frame. The output window has no
+    // UI, so it relays the failure to the control window over IPC; the
+    // standalone self-view reopens its own picker with a hint (e.g.
     // lid-closed built-in camera, wedged USB cam).
-    if (!IS_OUTPUT) {
-      const hint = document.getElementById('cam-hint');
-      hint.textContent = t('cam_black');
-      hint.classList.add('visible');
-      picker.classList.remove('hidden');
-    }
+    if (IS_OUTPUT) window.electronAPI?.reportCameraFailed?.();
+    else showCameraFailedPicker();
     return;
   }
   camRestarts++;
@@ -1302,8 +1352,22 @@ function watchCamera(deviceId, stream) {
   }));
 }
 
+// Nudge key: bumping it fires a storage event in the output window even when
+// the user re-picks the SAME camera (setItem with an unchanged value doesn't).
+const CAM_RETRY_KEY = 'laolao_camera_retry';
+
 startBtn.addEventListener('click', () => {
-  startCamera(camSelect.value).catch(e => alert(t('cam_start_fail') + e.message));
+  const id = camSelect.value;
+  if (!id) return;
+  if (IS_ELECTRON_CONTROL) {
+    // The output window is the sole camera consumer — just record the choice
+    // and nudge it; the preview will show the result.
+    store(SAVED_CAM_KEY, id);
+    store(CAM_RETRY_KEY, String(Date.now()));
+    picker.classList.add('hidden');
+    return;
+  }
+  startCamera(id).catch(e => alert(t('cam_start_fail') + e.message));
 });
 
 document.getElementById('cam-toggle').addEventListener('click', () => {
@@ -1439,8 +1503,16 @@ async function init() {
   if (IS_OUTPUT) { outputStartCamera(); return; }
   await populateCameras();
   const savedId = localStorage.getItem(SAVED_CAM_KEY);
-  // Only auto-start if the saved camera is in the (filtered) list
-  if (savedId && camSelect.querySelector(`option[value="${savedId}"]`)) {
+  const savedOk = savedId && camSelect.querySelector(`option[value="${savedId}"]`);
+  if (IS_ELECTRON_CONTROL) {
+    // No local camera here — the output window owns it. Hide the picker when
+    // a valid choice already exists; otherwise let the user pick once.
+    if (savedOk) picker.classList.add('hidden');
+    else if (savedId) unstore(SAVED_CAM_KEY);
+    return;
+  }
+  // Standalone self-view: only auto-start if the saved camera is in the list
+  if (savedOk) {
     startCamera(savedId).catch(() => {});
   } else if (savedId) {
     // Saved camera was virtual or removed — clear it so user picks again
@@ -1919,8 +1991,11 @@ if (IS_OUTPUT) {
   window.addEventListener('storage', e => {
     if (!e.key) return;   // localStorage.clear()
     switch (e.key) {
-      case SAVED_CAM_KEY: {
-        // Camera switched in the control window — restart the feed.
+      case SAVED_CAM_KEY:
+      case CAM_RETRY_KEY: {
+        // Camera switched (or explicitly retried) in the control window —
+        // fresh retry budget, then restart the feed.
+        camRestarts = 0;
         const s = camVideo.srcObject;
         if (s) { s.getTracks().forEach(t => t.stop()); camVideo.srcObject = null; }
         outputStartCamera();
@@ -1946,6 +2021,37 @@ if (IS_OUTPUT) {
         syncColorsFromStorage();
         break;
     }
+  });
+}
+
+// ─── Output-frame preview (Electron control window) ────────────
+// The composed output frames (camera + captions, letterboxed) arrive over
+// IPC at ~15 fps — a true WYSIWYG self-view with a single camera consumer.
+if (IS_ELECTRON_CONTROL) {
+  const previewEl   = document.getElementById('preview');
+  const previewWait = document.getElementById('preview-wait');
+  let prevUrl       = null;
+  let lastFrameT    = 0;
+
+  window.electronAPI.onOutputFrame(buf => {
+    lastFrameT = Date.now();
+    const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
+    const old = prevUrl;
+    prevUrl = url;
+    previewEl.onload = () => { if (old) URL.revokeObjectURL(old); };
+    previewEl.src = url;
+  });
+
+  // Surface a dead output pipeline instead of freezing on the last frame.
+  setInterval(() => {
+    previewWait.classList.toggle(
+      'visible', !lastFrameT || Date.now() - lastFrameT > 3000);
+  }, 1000);
+
+  // Output window gave up on the camera — ask the user to pick another.
+  window.electronAPI.onCameraFailed?.(async () => {
+    await populateCameras();
+    showCameraFailedPicker();
   });
 }
 
@@ -1992,6 +2098,10 @@ function connect() {
 
     const text = (msg.text || '').trim();
     if (!text) return;
+
+    // The Electron control window previews the OUTPUT frames, which already
+    // contain the rendered captions — drawing them locally would double up.
+    if (IS_ELECTRON_CONTROL) return;
 
     if      (msg.type === 'partial') setPartial(text);
     else if (msg.type === 'final')   addFinalLine(text);

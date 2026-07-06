@@ -378,7 +378,7 @@ function connectVcSocket() {
   if (isQuitting) return;
   const sock = new net.Socket();
   sock.connect(VCAM_PORT, '127.0.0.1', () => {
-    console.log('[vcam] socket connected — starting capture loop');
+    console.log('[vcam] socket connected — frames now reach the virtual camera');
     vcSocket = sock;
     captureLoop();
   });
@@ -389,13 +389,18 @@ function connectVcSocket() {
   });
 }
 
+// The capture loop is the single frame source for BOTH sinks: the virtual
+// camera socket (30 fps, when connected) and the control window's self-view
+// preview (every 2nd frame ≈ 15 fps, over IPC). It starts as soon as the
+// output window loads — the preview must work even before/without the vcam.
 let captureRunning = false;
+let frameCount     = 0;
 function captureLoop() {
   if (captureRunning) return;
   captureRunning = true;
 
   async function tick() {
-    if (!outputWindow || outputWindow.isDestroyed() || !vcSocket) {
+    if (!outputWindow || outputWindow.isDestroyed()) {
       captureRunning = false;
       return;
     }
@@ -423,10 +428,18 @@ function captureLoop() {
         // Quality 92: localhost TCP has headroom, and caption text edges must
         // survive the call app's re-encode.
         const jpeg   = scaled.toJPEG(92);
-        const header = Buffer.allocUnsafe(4);
-        header.writeUInt32BE(jpeg.length);
-        vcSocket.write(header);
-        vcSocket.write(jpeg);
+        frameCount++;
+
+        if (vcSocket) {
+          const header = Buffer.allocUnsafe(4);
+          header.writeUInt32BE(jpeg.length);
+          vcSocket.write(header);
+          vcSocket.write(jpeg);
+        }
+        // Self-view preview in the control window (half rate is plenty).
+        if (frameCount % 2 === 0 && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('output-frame', jpeg);
+        }
       }
     } catch { /* window closing or socket gone */ }
 
@@ -442,6 +455,14 @@ ipcMain.handle('open-mic-settings', () => {
     ? 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'
     : 'ms-settings:privacy-microphone';
   shell.openExternal(url);
+});
+
+// The output window's camera watchdog ran out of retries — relay to the
+// control window so it can reopen the picker and ask the user.
+ipcMain.handle('camera-failed', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('camera-failed');
+  }
 });
 
 
@@ -534,6 +555,9 @@ app.whenReady().then(async () => {
   outputWindow.loadFile(OVERLAY, { query: { output: '1' } });
   outputWindow.webContents.setBackgroundThrottling(false);
   outputWindow.on('closed', () => { outputWindow = null; });
+  // Frames flow to the control-window preview immediately; the vcam sink
+  // joins in whenever its socket connects.
+  outputWindow.webContents.once('did-finish-load', () => captureLoop());
 
   // Readiness (informational for the server; gating for the vcam socket).
   waitForPort(WS_PORT, { timeoutMs: 120_000, label: 'caption server' });
