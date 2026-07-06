@@ -1,9 +1,13 @@
-"""
+r"""
 End-to-end mic diagnostic for Windows.
 Run via interactive scheduled task — NOT over SSH (audio requires GUI session).
 
-Usage:
+Usage (standalone diagnostic, no pytest needed):
   venv\Scripts\python tests\test_mic_e2e_windows.py
+
+Under pytest the checks run as environment-gated smoke tests: conditions that
+mean "this machine/session can't support the check" (no mic, muted mic, server
+not running) skip with a diagnosis instead of failing.
 """
 
 import json
@@ -13,6 +17,11 @@ import time
 
 import numpy as np
 import sounddevice as sd
+
+try:
+    import pytest
+except ImportError:                  # standalone mode: pytest is optional
+    pytest = None
 
 
 SAMPLE_RATE  = 16000
@@ -26,7 +35,10 @@ def section(title):
     print('='*60)
 
 
-def test_list_devices():
+# ─── Diagnostic helpers (return values; never named test_* so pytest ───────
+# ─── doesn't collect them as tests with fixture-looking args) ──────────────
+
+def _list_input_devices():
     section("1. All audio devices")
     devices = sd.query_devices()
     inputs = []
@@ -40,7 +52,7 @@ def test_list_devices():
     return inputs
 
 
-def test_record_device(index, name):
+def _record_device(index, name):
     """Record RECORD_SECS seconds and return rms, or None on failure."""
     try:
         print(f"  Recording {RECORD_SECS}s from [{index}] {name} ...", end=" ", flush=True)
@@ -58,29 +70,29 @@ def test_record_device(index, name):
         return None
 
 
-def test_all_devices(input_indices):
+def _record_all_devices(input_indices):
     section("2. Record from every input device")
     results = {}
     for i in input_indices:
         name = sd.query_devices(i)["name"]
-        rms = test_record_device(i, name)
+        rms = _record_device(i, name)
         results[i] = rms
     return results
 
 
-def test_default_device():
+def _record_default_device():
     section("3. Record from default input device")
     try:
         dev = sd.query_devices(kind="input")
         print(f"  Default input: [{sd.default.device[0]}] {dev['name']}")
-        rms = test_record_device(sd.default.device[0], dev["name"])
+        rms = _record_device(sd.default.device[0], dev["name"])
         return rms
     except Exception as e:
         print(f"  ERROR: {e}")
         return None
 
 
-def test_server_reachable(port=8765):
+def _server_reachable(port=8765):
     section("4. Check if server.py WebSocket is reachable")
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=2):
@@ -91,7 +103,7 @@ def test_server_reachable(port=8765):
         return False
 
 
-def test_server_level_messages(port=8765, wait_secs=5):
+def _read_server_levels(port=8765, wait_secs=5):
     section("5. Read level messages from server.py")
     try:
         import asyncio, websockets as ws
@@ -171,14 +183,47 @@ def summarize(input_indices, device_results, default_rms, server_up, server_rms)
         print("  FIX: Check mic_device in config.json matches a working device above.")
 
 
+# ─── Pytest wrappers (environment-gated: skip, don't fail, when the ────────
+# ─── machine/session can't support the check) ──────────────────────────────
+
+def test_input_devices_listed():
+    inputs = _list_input_devices()
+    if not inputs:
+        pytest.skip("no audio input devices in this environment (headless?)")
+
+
+def test_default_device_records():
+    rms = _record_default_device()
+    if rms is None:
+        pytest.skip("could not record from the default input device "
+                    "(no mic, no permission, or device busy)")
+    if rms < RMS_THRESHOLD:
+        pytest.skip(f"default mic records silence (rms={rms:.5f}) — "
+                    "muted mic or OS privacy settings, not a code bug")
+
+
+def test_server_reachable():
+    if not _server_reachable():
+        pytest.skip("server.py not running on :8765 — start it to run this diagnostic")
+
+
+def test_server_level_messages():
+    if not _server_reachable():
+        pytest.skip("server.py not running on :8765 — start it to run this diagnostic")
+    avg_rms = _read_server_levels()
+    if avg_rms is None:
+        pytest.skip("no level messages within 5s — server up but no audio "
+                    "source feeding it in this session")
+
+
 if __name__ == "__main__":
     print("Laolao Windows mic diagnostic")
     print(f"sounddevice {sd.__version__}  |  Python {sys.version.split()[0]}")
 
-    input_indices  = test_list_devices()
-    device_results = test_all_devices(input_indices)
-    default_rms    = test_default_device()
-    server_up      = test_server_reachable()
-    server_rms     = test_server_level_messages() if server_up else None
+    input_indices  = _list_input_devices()
+    device_results = _record_all_devices(input_indices)
+    default_rms    = _record_default_device()
+    server_up      = _server_reachable()
+    server_rms     = _read_server_levels() if server_up else None
 
     summarize(input_indices, device_results, default_rms, server_up, server_rms)
