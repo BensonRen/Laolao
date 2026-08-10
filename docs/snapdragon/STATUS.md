@@ -108,11 +108,20 @@ capturePage: first frame 1280x720        ← clamp fix holds (was 1008x720)
 capturePage: FIRST NON-BLACK frame at frame #19
 ```
 
-It is **not** the default because camera acquisition is unreliable once another
-consumer has held the device: a later quiet-machine run hung inside `getUserMedia`
-and produced zero frames. OBS and Electron cannot both own the single webcam.
-Requires `LAOLAO_PYTHON_CAMERA` pointed at an x64 interpreter (pyvirtualcam has no
-win-arm64 wheel).
+Camera acquisition was investigated and **fixed** (see
+`findings/WS-H-camera-reliability.md`). The hang was real but not general: three
+consecutive cold launches now succeed (`getUserMedia` 648–669 ms, 240–245 frames /
+20 s). It wedges only when the device is still held — Windows releases a USB webcam
+lazily — and `startCamera()` now races a 12 s timeout, retrying without the saved
+`deviceId` before walking the format ladder, so a busy camera degrades to a logged,
+recoverable failure instead of an unbounded black screen.
+
+It is **still not the default**, for a different reason than previously recorded:
+throughput is **~12 fps against a 30 fps target**, almost certainly the Adreno X2-90
+GPU-process crash forcing software rendering. The far end sees choppy video. Fixing
+that is the prerequisite for promoting this path. Also requires
+`LAOLAO_PYTHON_CAMERA` pointed at an x64 interpreter (pyvirtualcam has no win-arm64
+wheel), and only one program may hold the webcam at a time.
 
 ### Known limitations — all measured, none hidden
 
