@@ -1241,18 +1241,54 @@ const CAM_CONSTRAINT_LADDER = [
   { name: 'default', video: {} },
 ];
 
+// getUserMedia can HANG rather than reject when the camera is still held by a
+// process that has only just exited — Windows releases a USB webcam lazily, so
+// relaunching within a few seconds of a previous run (or while OBS owns the
+// device) can wait forever. There is no error and no frames: the window just
+// stays black, which reads as "the app is broken" rather than "the camera is
+// busy". Racing a timeout turns an unbounded wait into something we can log,
+// recover from, and explain.
+const GUM_TIMEOUT_MS = 12000;
+
+function getUserMediaOrTimeout(constraints, ms = GUM_TIMEOUT_MS) {
+  let timer;
+  const bell = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const e = new Error(
+        `camera did not respond within ${ms}ms — it is probably still held by `
+        + 'another program (OBS, a browser tab, or a Laolao run that just exited)');
+      e.name = 'CameraBusyTimeout';
+      reject(e);
+    }, ms);
+  });
+  return Promise.race([navigator.mediaDevices.getUserMedia(constraints), bell])
+    .finally(() => clearTimeout(timer));
+}
+
 async function startCamera(deviceId, level = 0) {
   const lv = Math.min(level, CAM_CONSTRAINT_LADDER.length - 1);
   const rung = CAM_CONSTRAINT_LADDER[lv];
   diagLog(`startCamera: device=${deviceId ? deviceId.slice(0, 8) + '…' : '(default)'} format=${rung.name}`);
   let stream;
+  const t0 = Date.now();
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
+    stream = await getUserMediaOrTimeout({
       video: { ...(deviceId ? { deviceId: { exact: deviceId } } : {}), ...rung.video },
       audio: false,
     });
+    diagLog(`startCamera: getUserMedia resolved in ${Date.now() - t0}ms`);
   } catch (e) {
-    diagLog(`startCamera: getUserMedia FAILED ${e.name}: ${e.message} (format=${rung.name})`);
+    diagLog(`startCamera: getUserMedia FAILED after ${Date.now() - t0}ms `
+          + `${e.name}: ${e.message} (format=${rung.name})`);
+    // A timeout against an *exact* deviceId almost always means that specific
+    // camera is still held, or the saved id went stale after a replug. Retry
+    // once without the id so the user gets whatever camera is actually free,
+    // before walking down the format ladder. deviceId is null on that retry,
+    // so this cannot recurse more than once.
+    if (e.name === 'CameraBusyTimeout' && deviceId) {
+      diagLog('startCamera: retrying with the default camera instead of the saved one');
+      return startCamera(null, lv);
+    }
     // Unsatisfiable constraints (OverconstrainedError) → try the next rung.
     if (lv < CAM_CONSTRAINT_LADDER.length - 1) return startCamera(deviceId, lv + 1);
     releaseCamera(); onCameraGaveUp(); return;
