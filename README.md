@@ -199,10 +199,15 @@ Open camera settings in your video call app and choose **"OBS Virtual Camera"**.
 
 Snapdragon PCs run a different lane. `faster-whisper` cannot install there at
 all — its `ctranslate2` dependency publishes no win-arm64 build — so Whisper
-runs on **ONNX Runtime against the Hexagon NPU** instead, at **88 ms partial /
-93 ms final**. `pyvirtualcam` has no ARM64 wheel either, so a portable copy of
-**OBS ARM64 does the compositing and provides the camera**, and there is no
-Electron app in the loop.
+runs on **ONNX Runtime against the Hexagon NPU** instead. In practice a caption
+appears about **0.85 s after you start speaking**, and the words reach the far
+end's screen about **0.65 s** after that. (Whisper itself takes only ~90 ms per
+pass on the NPU; the rest is voice-activity detection and frame timing. The
+90 ms figure is the interesting one for a benchmark, not the one you feel.)
+
+`pyvirtualcam` has no ARM64 wheel either, so a portable copy of **OBS ARM64 does
+the compositing and provides the camera**, and there is no Electron app in the
+loop.
 
 The whole thing is one double-click.
 
@@ -250,7 +255,7 @@ webcam back to other apps.
 | Constraint | Why | What it means for you |
 |---|---|---|
 | Models limited to `tiny` / `base` / `large-v3-turbo` | Only those have a precompiled Qualcomm NPU export. `small` and `medium` fall back to the CPU and run ~25× slower | `config.json` still says `small`; the ARM64 backend substitutes `base` and says so in the log. Set `"model": "large-v3-turbo"` for the best Chinese accuracy (CER 0.049 vs 0.196) |
-| **Energy VAD only** | `silero-vad` pulls PyTorch, which has no win-arm64 build | Slightly blunter speech detection. Lower `silence_rms` (e.g. `0.004`) if quiet speech is missed |
+| **Energy VAD only** | `silero-vad` pulls PyTorch, which has no win-arm64 build | It measures loudness, not speech, so **steady room noise above about −40 dBFS reads as talking** — and Whisper, handed non-speech, invents plausible captions ("Thank you very much."). Use it in a quiet room, and prefer a headset mic. If quiet speech is being missed you can lower `silence_rms` (e.g. `0.004`), but that trades directly against more hallucinated captions; raise it if phantom text appears while nobody is speaking |
 | **No echo cancellation** | The mic is captured by Python, not by Chromium | **Wear a headset.** On speakers, the other person's voice gets transcribed as your caption |
 | No toolbar / hot-swap language | There is no Electron control window on this path | Language, colours and caption size come from `config.json` and the overlay's URL parameters |
 | **The camera works for x64 apps *or* ARM64 apps, not both** | Windows-on-ARM64 has a single 64-bit COM slot for the camera, and OBS ships no ARM64X filter | Default is x64, which is what WeChat, Zoom and Teams are. If the camera shows up in the picker but the picture is **black**, your app is ARM64-native — run `Laolao-arm64.bat -Arch arm64` |
