@@ -546,19 +546,23 @@ let captureRunning = false;
 let frameCount     = 0;
 let capturedEver   = false;
 let litEver        = false;
+let costCapture = 0, costScale = 0, costEncode = 0, lastHeartbeat = 0;
 function captureLoop() {
   if (captureRunning) { diag('captureLoop: already running, skip'); return; }
   captureRunning = true;
   diag('captureLoop: started');
 
   async function tick() {
+    const tickStart = Date.now();
     if (!outputWindow || outputWindow.isDestroyed()) {
       captureRunning = false;
       diag('captureLoop: output window gone, stopping');
       return;
     }
     try {
+      const tCap0 = Date.now();
       const img  = await outputWindow.webContents.capturePage();
+      const tCap1 = Date.now();
       const size = img.getSize();
       const targetAspect = CAM_W / CAM_H;
       if (!capturedEver) {
@@ -584,11 +588,23 @@ function captureLoop() {
             width: cw, height: ch,
           });
         }
-        const scaled = frame.resize({ width: CAM_W, height: CAM_H });
+        const tScale0 = Date.now();
+        const scaled = (size.width === CAM_W && size.height === CAM_H)
+          ? frame                                   // already right size: skip
+          : frame.resize({ width: CAM_W, height: CAM_H });
+        const tScale1 = Date.now();
         // Quality 92: localhost TCP has headroom, and caption text edges must
         // survive the call app's re-encode.
         const jpeg   = scaled.toJPEG(92);
+        const tEnc1  = Date.now();
         frameCount++;
+        // Where the frame budget actually goes. Without this the only visible
+        // symptom of a slow path is a low frame rate, with no way to tell
+        // whether capture, rescale or encode is responsible — and on a scaled
+        // display they cost very different amounts.
+        costCapture += tCap1 - tCap0;
+        costScale   += tScale1 - tScale0;
+        costEncode  += tEnc1 - tScale1;
 
         // Black-frame telemetry: log the transition to first lit frame, and a
         // heartbeat every ~5s (150 frames @30fps) with black/lit + sink state.
@@ -598,9 +614,15 @@ function captureLoop() {
           diag(`capturePage: FIRST NON-BLACK frame at frame #${frameCount}`);
         }
         if (frameCount % 150 === 0) {
+          const n = 150, now = Date.now();
+          const fps = lastHeartbeat ? (n * 1000 / (now - lastHeartbeat)) : 0;
           diag(`capturePage: frame #${frameCount} ${size.width}x${size.height} `
             + `black=${black} vcSocket=${!!vcSocket} `
-            + `control=${!!(mainWindow && !mainWindow.isDestroyed())}`);
+            + `control=${!!(mainWindow && !mainWindow.isDestroyed())} `
+            + `| ${fps.toFixed(1)}fps avg capture=${(costCapture / n).toFixed(1)}ms `
+            + `scale=${(costScale / n).toFixed(1)}ms encode=${(costEncode / n).toFixed(1)}ms`);
+          costCapture = costScale = costEncode = 0;
+          lastHeartbeat = now;
         }
 
         if (vcSocket) {
@@ -620,7 +642,15 @@ function captureLoop() {
       if (frameCount % 30 === 0) diag(`capturePage: ERROR ${e && e.message}`);
     }
 
-    setTimeout(tick, 1000 / CAM_FPS);
+    // Fixed RATE, not fixed delay. This used to be setTimeout(tick, 1000/FPS)
+    // unconditionally, which waits a full frame period *after* the work is
+    // done — so the real period was work + 33ms. On Snapdragon, where a frame
+    // costs ~27ms (capture 13 + rescale 10 + encode 4), that produced ~14fps
+    // against a 30fps target: the virtual camera ran at less than half rate
+    // and nothing reported it. Subtracting the elapsed time keeps the cadence
+    // honest, and clamping at 0 means a machine that cannot keep up simply
+    // runs flat out instead of falling further behind.
+    setTimeout(tick, Math.max(0, (1000 / CAM_FPS) - (Date.now() - tickStart)));
   }
 
   tick();
