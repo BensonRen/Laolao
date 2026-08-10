@@ -573,6 +573,33 @@
     body.output-mode #preview-wait,
     body.output-mode #picker { display: none !important; }
 
+    /* ── Panel mode (?output=1&controls=1) ──
+       The caption window on the OBS path, where there is no Electron control
+       window to host a toolbar. Puts back only the controls that can actually
+       do something from a separate process: the caption language (which is
+       applied by the server over the WebSocket), the audio level meter and VAD
+       dot (server-driven), the UI-language selector (purely local text) and
+       help. Everything else is appearance, and appearance lives in OBS's own
+       browser source — a different browser context that this window's
+       localStorage cannot reach. */
+    /* Wrap rather than clip. It fits on one row at the default 920px, but the
+       user can resize this window and the UI-language labels differ in width
+       between locales — a toolbar that overflows would silently swallow
+       whichever control sits last. */
+    body.panel-mode #toolbar { display: flex !important; flex-wrap: wrap; row-gap: 6px; }
+    body.panel-mode .tb-spacer { flex: 1 1 auto; min-width: 0; }
+    /* :not(.hidden) matters — #onboard is toggled by a `hidden` class, and a
+       bare `display:flex !important` would pin the guide permanently open. */
+    body.panel-mode #onboard:not(.hidden) { display: flex !important; }
+    body.panel-mode #toolbar .adv,
+    body.panel-mode #cam-toggle,
+    body.panel-mode #simple-toggle { display: none !important; }
+    /* With ?mic=1 this window owns the microphone, so its "no signal" banner
+       is the only thing that can tell the user why captions stopped. */
+    body.panel-mode #mic-warn:not(.hidden) { display: flex !important; }
+    /* Captions sit below the toolbar rather than under it. */
+    body.panel-mode #captions { top: 52px; }
+
     /* ── OBS chroma key ── */
     body.chromakey { background: #00ff00; }
     body.chromakey #camera { display: none; }
@@ -777,12 +804,33 @@ const CHROMA_KEY = params.has('chromakey');
 // un-mirrored, mic-less, and read-only on localStorage (the control window
 // owns all settings; we follow them via `storage` events).
 const IS_OUTPUT  = params.get('output') === '1';
+// Panel mode (?output=1&controls=1): a caption window that ALSO carries the
+// few controls that can work when Laolao is composited by OBS rather than by
+// Electron. It shows captions like any output window but never opens the
+// camera (OBS owns it) and never streams the mic.
+//
+// Deliberately narrow. This window and OBS's browser source are separate
+// browser contexts — OBS embeds its own CEF — so `storage` events cannot
+// travel between them and none of the appearance settings would reach the
+// composited frame. Only what is routed through the *server* actually takes
+// effect, which is the caption language. Exposing colour or width buttons
+// here would give the user controls that silently do nothing.
+const IS_PANEL   = IS_OUTPUT && params.get('controls') === '1';
+// ?mic=1 (panel only): this window captures the microphone through Chromium
+// and streams PCM to the engine, instead of the engine opening the mic itself
+// with sounddevice. The point is echo cancellation — sounddevice has none, so
+// on speakers the far end's voice comes back in and gets captioned as if the
+// local user had said it. Chromium's AEC removes what is being played back.
+// The engine MUST be started with --no-mic when this is on, or both sources
+// feed the queue and every caption doubles.
+const PANEL_MIC  = IS_PANEL && params.get('mic') === '1';
 
 document.documentElement.style.setProperty('--font-size', FONT_SIZE + 'px');
 document.documentElement.style.setProperty('--bg', BG_COLOR);
 document.documentElement.style.setProperty('--fade-ms', FADE_MS + 'ms');
 if (CHROMA_KEY) document.body.classList.add('chromakey');
 if (IS_OUTPUT)  document.body.classList.add('output-mode');
+if (IS_PANEL)   document.body.classList.add('panel-mode');
 
 // Electron control window: the output window is the ONLY camera consumer
 // (dual getUserMedia wedges USB cams — EMEET C950 delivers black frames).
@@ -802,8 +850,10 @@ diagLog('overlay loaded');
 // Settings writes go through these so the output window never writes (its
 // stale copies would fight the control window via storage events).
 const _ls = window.localStorage;
-function store(key, val)  { if (!IS_OUTPUT) _ls.setItem(key, val); }
-function unstore(key)     { if (!IS_OUTPUT) _ls.removeItem(key); }
+// The panel is the only output-mode window allowed to write: it is the one
+// the user actually operates, so its language choice must survive a restart.
+function store(key, val)  { if (!IS_OUTPUT || IS_PANEL) _ls.setItem(key, val); }
+function unstore(key)     { if (!IS_OUTPUT || IS_PANEL) _ls.removeItem(key); }
 
 // ─── UI language (i18n) ────────────────────────────────────────
 // The dictionary lives in overlay/i18n.js (window.LAOLAO_I18N). This is the
@@ -1241,18 +1291,54 @@ const CAM_CONSTRAINT_LADDER = [
   { name: 'default', video: {} },
 ];
 
+// getUserMedia can HANG rather than reject when the camera is still held by a
+// process that has only just exited — Windows releases a USB webcam lazily, so
+// relaunching within a few seconds of a previous run (or while OBS owns the
+// device) can wait forever. There is no error and no frames: the window just
+// stays black, which reads as "the app is broken" rather than "the camera is
+// busy". Racing a timeout turns an unbounded wait into something we can log,
+// recover from, and explain.
+const GUM_TIMEOUT_MS = 12000;
+
+function getUserMediaOrTimeout(constraints, ms = GUM_TIMEOUT_MS) {
+  let timer;
+  const bell = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const e = new Error(
+        `camera did not respond within ${ms}ms — it is probably still held by `
+        + 'another program (OBS, a browser tab, or a Laolao run that just exited)');
+      e.name = 'CameraBusyTimeout';
+      reject(e);
+    }, ms);
+  });
+  return Promise.race([navigator.mediaDevices.getUserMedia(constraints), bell])
+    .finally(() => clearTimeout(timer));
+}
+
 async function startCamera(deviceId, level = 0) {
   const lv = Math.min(level, CAM_CONSTRAINT_LADDER.length - 1);
   const rung = CAM_CONSTRAINT_LADDER[lv];
   diagLog(`startCamera: device=${deviceId ? deviceId.slice(0, 8) + '…' : '(default)'} format=${rung.name}`);
   let stream;
+  const t0 = Date.now();
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
+    stream = await getUserMediaOrTimeout({
       video: { ...(deviceId ? { deviceId: { exact: deviceId } } : {}), ...rung.video },
       audio: false,
     });
+    diagLog(`startCamera: getUserMedia resolved in ${Date.now() - t0}ms`);
   } catch (e) {
-    diagLog(`startCamera: getUserMedia FAILED ${e.name}: ${e.message} (format=${rung.name})`);
+    diagLog(`startCamera: getUserMedia FAILED after ${Date.now() - t0}ms `
+          + `${e.name}: ${e.message} (format=${rung.name})`);
+    // A timeout against an *exact* deviceId almost always means that specific
+    // camera is still held, or the saved id went stale after a replug. Retry
+    // once without the id so the user gets whatever camera is actually free,
+    // before walking down the format ladder. deviceId is null on that retry,
+    // so this cannot recurse more than once.
+    if (e.name === 'CameraBusyTimeout' && deviceId) {
+      diagLog('startCamera: retrying with the default camera instead of the saved one');
+      return startCamera(null, lv);
+    }
     // Unsatisfiable constraints (OverconstrainedError) → try the next rung.
     if (lv < CAM_CONSTRAINT_LADDER.length - 1) return startCamera(deviceId, lv + 1);
     releaseCamera(); onCameraGaveUp(); return;
@@ -1490,6 +1576,10 @@ if (!IS_OUTPUT && !localStorage.getItem(ONBOARD_KEY)) showOnboard();
 // "no camera chosen yet" case, resolved later via storage events.
 let outputCamRetry = null;
 function outputStartCamera() {
+  // The panel is a captions-and-controls window on the OBS path. OBS owns the
+  // physical webcam there, and only one program can hold it — opening it here
+  // would take the picture away from the thing actually being broadcast.
+  if (IS_PANEL) { diagLog('outputStartCamera: panel mode, OBS owns the camera'); return; }
   if (camVideo.srcObject) { diagLog('outputStartCamera: already have a stream'); return; }
   clearTimeout(outputCamRetry);
   const savedId = localStorage.getItem(SAVED_CAM_KEY);
@@ -1558,6 +1648,11 @@ async function startMicStream() {
     }, video: false });
   } catch (e) {
     console.warn('[laolao] mic getUserMedia failed:', e);
+    // On the OBS path this window IS the only audio source — the engine was
+    // started with --no-mic. A silent failure here means no captions at all
+    // and no explanation, so surface the banner immediately rather than
+    // waiting out the 15s no-signal timer.
+    if (PANEL_MIC) { try { showMicWarn(); } catch {} }
     return;
   }
 
@@ -2084,12 +2179,13 @@ function connect() {
     // The control window owns the server conversation: language sync, mic
     // streaming, and the mic warning. The output window is display-only —
     // a second mic stream would double-feed audio and double the captions.
-    if (!IS_OUTPUT) {
+    if (!IS_OUTPUT || IS_PANEL) {
       // Sync saved language to server on reconnect
       applyLanguage(localStorage.getItem(LANG_KEY) || 'zh', true);
       // Inside Electron (all platforms), stream mic audio over the WebSocket —
-      // python runs --no-mic and Chromium provides echo cancellation.
-      if (window.electronAPI) startMicStream();
+      // python runs --no-mic and Chromium provides echo cancellation. The OBS
+      // path gets the same treatment through the panel when ?mic=1 is set.
+      if (window.electronAPI || PANEL_MIC) startMicStream();
       // Start mic-warning timer on connect — fires if no audio signal after 15 s
       scheduleMicWarn();
     }

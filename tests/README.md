@@ -48,22 +48,36 @@ The `tests/fixtures/` directory contains generated WAV files used by some tests.
 This directory is **gitignored** — generate fixtures locally before running
 audio-dependent tests.
 
-### Synthetic fixtures (silence + sine tone, no internet needed)
+### Standard fixtures
 
 ```bash
 python tests/generate_test_audio.py
 # Optional: specify a custom output directory
 python tests/generate_test_audio.py --output-dir /tmp/my_fixtures
+# Never touch the network (skips the Mandarin fallback clip)
+python tests/generate_test_audio.py --no-download
 ```
 
 This creates:
 - `tests/fixtures/silence_2s.wav` — 2 seconds of silence
 - `tests/fixtures/tone_440hz_1s.wav` — 1 second 440 Hz sine tone
-- `tests/fixtures/chinese_speech.wav` — macOS TTS Mandarin speech *(macOS only)*
-- `tests/fixtures/english_speech.wav` — macOS TTS English speech *(macOS only)*
+- `tests/fixtures/english_speech.wav` — short English utterance (system TTS)
+- `tests/fixtures/en_long_speech.wav` — ~8 s English utterance for latency/streaming
+- `tests/fixtures/chinese_speech.wav` — Mandarin speech
 
-macOS TTS requires a Mandarin voice (Tingting or Meijia).  Install via
+Speech is synthesised with the platform's TTS: macOS `say`, or Windows SAPI
+(`System.Speech.Synthesis.SpeechSynthesizer`, writing 16 kHz / 16-bit / mono
+directly). Every speech WAV is written with a ground-truth `<stem>.txt` holding
+only its transcript — that is what `docs/snapdragon/acceptance/check.py` (A2/A3)
+compares against. Provenance goes in `<stem>.source.json` and `fixtures/README.md`,
+and every generated WAV is read back and validated (rate, channels, bit depth,
+duration, peak amplitude) before the script reports success.
+
+macOS Mandarin TTS requires a Mandarin voice (Tingting or Meijia).  Install via
 **System Settings → Accessibility → Spoken Content → System Voice → Manage Voices**.
+Windows ships no Chinese SAPI voice without a language pack; when none is found the
+generator downloads an openly-licensed Mandarin clip (AISHELL-1, Apache-2.0) together
+with the corpus's own published transcript. It never invents a transcript.
 
 ### Downloading YouTube audio
 
@@ -85,7 +99,7 @@ The script clips to the first `--duration` seconds and converts to 16 kHz mono W
 | File | Purpose |
 |------|---------|
 | `conftest.py` | Shared fixtures and marker registration |
-| `generate_test_audio.py` | Synthetic WAV generation (silence, tones, macOS TTS) |
+| `generate_test_audio.py` | Fixture WAV generation (silence, tones, macOS `say` / Windows SAPI TTS, ground truth) |
 | `download_audio.py` | YouTube audio downloader via yt-dlp |
 | `test_backends.py` | Unit + integration tests for transcription backends |
 | `test_vad.py` | Unit tests for VAD implementations |

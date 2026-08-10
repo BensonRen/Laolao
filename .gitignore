@@ -1,5 +1,11 @@
 venv/
+.venv/
+.venv-arm64/
+.venv-x64/
 __pycache__/
+
+# Claude Code runtime state (not project config — settings.json may be committed)
+.claude/scheduled_tasks.lock
 *.pyc
 .DS_Store
 ~/.cache/laolao/
