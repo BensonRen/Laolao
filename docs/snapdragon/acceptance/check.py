@@ -708,19 +708,86 @@ def a8():
 # A9 / A10 — offline operation, one-click launch
 # ─────────────────────────────────────────────────────────────────────
 
+# Installed into the offline child via PYTHONPATH. `site` imports
+# sitecustomize automatically at interpreter start, before anything else runs.
+_EGRESS_BLOCKER = '''
+"""Refuse every outbound socket to a non-loopback address."""
+import socket
+
+# Exact matches, kept separate from the prefix test on purpose: an earlier
+# version folded "" into a startswith() tuple, and since every string starts
+# with "", the blocker silently allowed everything and A9 "passed" while the
+# child was free to download. A permissive security check that reports success
+# is worse than no check.
+_LOCAL_EXACT = {"localhost", "::1", "0.0.0.0", "::", ""}
+
+
+def _is_local(addr):
+    try:
+        host = addr[0] if isinstance(addr, (tuple, list)) else addr
+    except Exception:
+        return False
+    host = str(host)
+    return host in _LOCAL_EXACT or host.startswith("127.")
+
+
+class Egress(OSError):
+    pass
+
+
+_connect = socket.socket.connect
+_connect_ex = socket.socket.connect_ex
+_create = socket.create_connection
+
+
+def connect(self, addr, *a, **k):
+    if not _is_local(addr):
+        raise Egress(f"A9: blocked outbound connection to {addr!r}")
+    return _connect(self, addr, *a, **k)
+
+
+def connect_ex(self, addr, *a, **k):
+    if not _is_local(addr):
+        raise Egress(f"A9: blocked outbound connection to {addr!r}")
+    return _connect_ex(self, addr, *a, **k)
+
+
+def create_connection(addr, *a, **k):
+    if not _is_local(addr):
+        raise Egress(f"A9: blocked outbound connection to {addr!r}")
+    return _create(addr, *a, **k)
+
+
+socket.socket.connect = connect
+socket.socket.connect_ex = connect_ex
+socket.create_connection = create_connection
+'''
+
+
 @check("A9", "runs fully offline after model download")
 def a9():
-    """Re-run A2 in a subprocess with every hub client forced offline.
+    """Re-run A2 in a child that physically cannot reach the network.
 
-    Not a perfect substitute for pulling the network cable (that needs admin),
-    but it is falsifiable: if any code path still reaches for the network to
-    load a model or tokenizer, these variables turn it into a hard error
-    instead of a silent download.
+    Environment variables alone are not enough, and believing they were is the
+    trap here. `HF_HUB_OFFLINE` only governs huggingface_hub; the Qualcomm QNN
+    context (~180 MB) is fetched with a plain `urllib.request.urlretrieve`,
+    which ignores those variables entirely — so the previous version of this
+    check would happily "prove offline operation" while downloading.
+
+    So the child also gets a sitecustomize that raises on any connect() to a
+    non-loopback address. Loopback stays open because the caption server talks
+    to itself. Passing under this means the transcript really did come from
+    disk.
     """
     import os
+    import shutil
+    import tempfile
+
     if os.environ.get("LAOLAO_A9_CHILD"):
         return _r("A9", a9.title, SKIP, "skipped inside the offline child run")
 
+    jail = Path(tempfile.mkdtemp(prefix="laolao_a9_"))
+    (jail / "sitecustomize.py").write_text(_EGRESS_BLOCKER, encoding="utf-8")
     env = {
         **os.environ,
         "LAOLAO_A9_CHILD": "1",
@@ -729,20 +796,29 @@ def a9():
         "HF_DATASETS_OFFLINE": "1",
         "HF_HUB_DISABLE_TELEMETRY": "1",
         "PYTHONIOENCODING": "utf-8",
+        "PYTHONPATH": str(jail) + os.pathsep + os.environ.get("PYTHONPATH", ""),
     }
     try:
         p = subprocess.run(
             [sys.executable, str(Path(__file__).resolve()), "--only", "A2"],
-            capture_output=True, text=True, timeout=600, env=env,
+            capture_output=True, text=True, timeout=900, env=env,
             encoding="utf-8", errors="replace")
     except subprocess.TimeoutExpired:
         return _r("A9", a9.title, FAIL, "offline A2 run timed out")
+    finally:
+        shutil.rmtree(jail, ignore_errors=True)
 
-    tail = (p.stdout or "")[-700:] + (p.stderr or "")[-400:]
-    ok = p.returncode == 0 and "[PASS " in (p.stdout or "")
-    return _r("A9", a9.title, PASS if ok else FAIL,
-              f"offline A2 exit={p.returncode}\n{tail.strip()}",
-              returncode=p.returncode)
+    out, err = p.stdout or "", p.stderr or ""
+    blocked = "A9: blocked outbound connection" in (out + err)
+    ok = p.returncode == 0 and "[PASS " in out and not blocked
+    ev = f"offline A2 exit={p.returncode} (env offline + socket-level egress block)"
+    if blocked:
+        ev += "\n  reached for the network — this is a real offline failure:\n  " + \
+              next((l for l in (out + err).splitlines()
+                    if "blocked outbound" in l), "")
+    ev += "\n" + (out[-600:] + err[-300:]).strip()
+    return _r("A9", a9.title, PASS if ok else FAIL, ev,
+              returncode=p.returncode, attempted_egress=blocked)
 
 
 # CLSID of the OBS DirectShow virtual-camera filter (the device Laolao tells
