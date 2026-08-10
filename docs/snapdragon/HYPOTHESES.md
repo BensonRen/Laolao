@@ -41,10 +41,43 @@ Evidence = a command and its actual output, or a file path. Never "should work".
 
 | ID | Hypothesis | Test | Status | Evidence |
 |---|---|---|---|---|
-| H-200 | x64 Python 3.11 installs and runs under Prism on this box | install, `python -c "import platform;print(platform.machine())"` | OPEN | |
-| H-201 | `ctranslate2` + `faster-whisper` x64 wheels install and transcribe under emulation | run repo's own tests | OPEN | |
-| H-202 | Emulated faster-whisper meets A4 latency with `base`/`small` | `./run.bat --benchmark` | OPEN | |
-| H-203 | `pyvirtualcam` x64 wheel installs and opens the OBS camera under emulation | open device, push frames | OPEN | |
+| H-200 | x64 Python 3.11 installs and runs under Prism on this box | install, check arch | **CONFIRMED** | `IsWow64Process2` → `native=0xaa64` (ARM64 silicon) running an `AMD64` PE. Note: `GetNativeSystemInfo()` *lies* inside an emulated process (reports AMD64) — do not use it to detect Prism. |
+| H-201 | `ctranslate2` + `faster-whisper` x64 wheels install and transcribe under emulation | run repo's own tests | **CONFIRMED** | Stock `requirements.txt` installed verbatim, all prebuilt `win_amd64` wheels, no compiler. `jfk.wav` → character-exact. Mandarin `asr_example_zh.wav` → correct but `达摩院`→`打模院` (a `base`-model homophone slip, **not** an emulation artifact). Output already Simplified. **Emulation causes zero accuracy regression.** |
+| H-202 | Emulated faster-whisper meets A4 latency with `base`/`small` | timed passes | **REFUTED** | Misses the A4 budget by ~3–10×. Key insight: Whisper always pads to a **30 s mel spectrogram**, so encoder cost is constant regardless of window size — shrinking `rolling_window_s`/`partial_interval_s` cannot buy latency back. |
+| H-203 | `pyvirtualcam` x64 wheel installs and opens the OBS camera under emulation | open device, push frames | **CONFIRMED (exceeded)** | Not just imported — *opened* `OBS Virtual Camera` and accepted a 1280×720 RGB frame. |
+
+### ⚠ H-210 — architectural constraint discovered by WS-B (changes the whole design)
+
+**The OBS *ARM64* distribution ships its DirectShow virtual-camera filter as x64 and x86 only.
+There is no ARM64 build of the filter.**
+
+```
+CLSID\{A3FCE0F5-3493-419F-958A-ABA1250EC20B}\InprocServer32 -> obs-virtualcam-module64.dll
+WOW6432Node\CLSID\{A3FCE0F5-...}\InprocServer32             -> obs-virtualcam-module32.dll
+
+obs-virtualcam-module64.dll   machine=0x8664  AMD64(x64)
+obs-virtualcam-module32.dll   machine=0x014c  i386
+```
+
+A DirectShow filter is loaded **in-process** by whoever uses it. Therefore:
+
+- ✅ emulated-x64 producers can load it — *demonstrated*, H-203
+- ✅ x64 call apps (WeChat, Zoom) can load it — strong signal for **H-303**
+- ❌ a **native ARM64** process can **never** load it — so a native-ARM64 producer has no
+  in-process route to this camera
+
+**Consequence — the target architecture is mixed-architecture, and the repo already
+supports it.** `virtual_cam.py` is a *separate process* fed over TCP :8766 by design
+(`[4-byte BE length][JPEG]`). That process boundary is an architecture boundary for free:
+
+```
+native ARM64  Electron  ──capturePage→JPEG──▶ TCP :8766 ──▶ emulated x64  virtual_cam.py ──▶ OBS DShow filter ──▶ WeChat/Zoom
+native ARM64  server.py (ONNX/QNN STT)  ──WebSocket :8765──▶ overlay
+```
+
+Only the thin frame-sink runs emulated; STT and UI stay native. This is strictly better
+than emulating everything, because H-202 shows STT is exactly what emulation ruins and
+H-203 shows the sink is exactly what emulation handles fine.
 
 ## Open hypotheses — Virtual camera / OBS
 

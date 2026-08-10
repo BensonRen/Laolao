@@ -25,6 +25,7 @@ Exit code 0 = every hypothesis this script can decide came out CONFIRMED.
 from __future__ import annotations
 
 import ctypes
+import ctypes.wintypes
 import json
 import os
 import platform
@@ -109,39 +110,25 @@ def check_h200() -> None:
     print("platform.arch()    :", platform.architecture())
     print("sys.executable     :", sys.executable)
 
-    # The *host* architecture, straight from the kernel, is not affected by the
-    # WOW64/Prism translation layer the way PROCESSOR_ARCHITECTURE is.
-    class SYSTEM_INFO(ctypes.Structure):
-        _fields_ = [
-            ("wProcessorArchitecture", ctypes.c_ushort),
-            ("wReserved", ctypes.c_ushort),
-            ("dwPageSize", ctypes.c_ulong),
-            ("lpMinimumApplicationAddress", ctypes.c_void_p),
-            ("lpMaximumApplicationAddress", ctypes.c_void_p),
-            ("dwActiveProcessorMask", ctypes.POINTER(ctypes.c_ulong)),
-            ("dwNumberOfProcessors", ctypes.c_ulong),
-            ("dwProcessorType", ctypes.c_ulong),
-            ("dwAllocationGranularity", ctypes.c_ulong),
-            ("wProcessorLevel", ctypes.c_ushort),
-            ("wProcessorRevision", ctypes.c_ushort),
-        ]
+    # NOTE: GetNativeSystemInfo() lies inside a Prism-emulated x64 process — it
+    # reports AMD64. IsWow64Process2()'s *nativeMachine* out-param does not: it
+    # reports the real silicon. HANDLE must be declared or the pseudo-handle
+    # (-1) is truncated to 32 bits and the call fails with ok=0.
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.GetCurrentProcess.restype = ctypes.wintypes.HANDLE
+    k.IsWow64Process2.argtypes = [
+        ctypes.wintypes.HANDLE,
+        ctypes.POINTER(ctypes.wintypes.USHORT),
+        ctypes.POINTER(ctypes.wintypes.USHORT),
+    ]
+    k.IsWow64Process2.restype = ctypes.wintypes.BOOL
 
-    si = SYSTEM_INFO()
-    ctypes.windll.kernel32.GetNativeSystemInfo(ctypes.byref(si))
-    arch_names = {0: "x86", 5: "ARM", 6: "IA64", 9: "x64", 12: "ARM64"}
-    native = arch_names.get(si.wProcessorArchitecture, si.wProcessorArchitecture)
-    print("native host arch   :", native, "(GetNativeSystemInfo)")
-    print("logical processors :", si.dwNumberOfProcessors)
-
-    # IsWow64Process2: non-zero process machine => the process is being translated.
-    proc_machine = ctypes.c_ushort(0)
-    native_machine = ctypes.c_ushort(0)
-    ok = ctypes.windll.kernel32.IsWow64Process2(
-        ctypes.windll.kernel32.GetCurrentProcess(),
-        ctypes.byref(proc_machine),
-        ctypes.byref(native_machine),
+    proc_machine = ctypes.wintypes.USHORT(0)
+    native_machine = ctypes.wintypes.USHORT(0)
+    ok = k.IsWow64Process2(
+        k.GetCurrentProcess(), ctypes.byref(proc_machine), ctypes.byref(native_machine)
     )
-    IMAGE_FILE_MACHINE = {0x0: "NATIVE/none", 0x8664: "AMD64", 0xAA64: "ARM64", 0x1C4: "ARMNT"}
+    IMAGE_FILE_MACHINE = {0x0: "UNKNOWN/not-WOW64", 0x8664: "AMD64", 0xAA64: "ARM64", 0x1C4: "ARMNT"}
     print(
         "IsWow64Process2    : ok=%s process=%s native=%s"
         % (
@@ -150,12 +137,12 @@ def check_h200() -> None:
             IMAGE_FILE_MACHINE.get(native_machine.value, hex(native_machine.value)),
         )
     )
+    print("PROCESSOR_IDENTIFIER:", os.environ.get("PROCESSOR_IDENTIFIER"))
+    print("cpu_count          :", os.cpu_count())
 
-    emulated = (
-        platform.machine() == "AMD64"
-        and native == "ARM64"
-        and proc_machine.value == 0x8664
-    )
+    # x64 PE + ARM64 silicon underneath == running under Prism.
+    # (x64-on-ARM64 is NOT classic WOW64, so processMachine is legitimately 0.)
+    emulated = platform.machine() == "AMD64" and native_machine.value == 0xAA64
     results["H-200"] = "CONFIRMED" if emulated else "REFUTED"
     print("=> H-200:", results["H-200"])
 
