@@ -56,6 +56,25 @@ Evidence = a command and its actual output, or a file path. Never "should work".
 | H-303 | The virtual camera enumerates for **x64-emulated** call apps (WeChat/Zoom are x64) | needs an x64/ARM64EC filter DLL registered too — verify | OPEN | |
 | H-304 | `overlay/index.html` works as an OBS **browser source** with transparency | add source, confirm captions render over webcam | OPEN | |
 | H-305 | OBS "Start Virtual Camera" + browser source fully replaces `virtual_cam.py`/pyvirtualcam | end-to-end pixel check | OPEN | |
+| H-306 | The built-in webcam (Qualcomm Spectra ISP) is openable by a **DirectShow** consumer, not MediaFoundation-only | open it from a DShow consumer and read a real frame | OPEN | On Snapdragon the camera runs through the Spectra ISP/AVStream stack, historically MF-first. If DShow cannot open it, OBS's Video Capture Device source sees nothing and the whole compositing plan needs an MF path. |
+
+### Pre-state baseline (before any install) — `acceptance/check.py --only A7 A10`
+
+```
+[FAIL ] A7  virtual=[]  all_devices=[
+      'Qualcomm(R) Spectra(TM)  ISP Camera Platform Device',
+      'Qualcomm(R) Spectra(TM)  ISP Camera MipiCsi Device',
+      'Qualcomm(R) Spectra(TM)  ISP Camera Front Sensor Device',
+      'Qualcomm(R) Spectra(TM)  ISP Camera JPEG Encoder Device',
+      'Qualcomm(R) Spectra(TM)  ISP Camera Device',
+      'Qualcomm(R) Spectra(TM)  ISP Camera Flash Device',
+      'Qualcomm(R) Spectra(TM)  ISP Camera AVStream Device',
+      'Qualcomm(R) Spectra(TM)  ISP Camera Auxiliary Sensor Device']
+[skip ] A10  launchers present: ['run.bat']   (x86 path only)
+```
+
+Confirms the A7 pre-state is a true negative: no virtual camera exists yet, so any
+later PASS is attributable to work done here and not to a pre-existing OBS install.
 
 ## Open hypotheses — Electron shell
 
