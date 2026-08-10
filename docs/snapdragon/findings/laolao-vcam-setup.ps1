@@ -189,12 +189,24 @@ function Receive-ObsWs {
 }
 
 function Invoke-ObsRequest {
-    param($Ws, [string]$Type, $Data = @{})
+    param($Ws, [string]$Type, $Data = @{}, [switch]$AllowFailure)
     $id = [Guid]::NewGuid().ToString()
     Send-ObsWs $Ws @{ op = 6; d = @{ requestType = $Type; requestId = $id; requestData = $Data } }
     while ($true) {
         $m = Receive-ObsWs $Ws
-        if ($m.op -eq 7 -and $m.d.requestId -eq $id) { return $m.d }
+        if ($m.op -eq 7 -and $m.d.requestId -eq $id) {
+            # obs-websocket v5 OMITS responseData entirely when a request fails,
+            # so callers reaching straight for .responseData get
+            # "The property 'responseData' cannot be found on this object" —
+            # which says nothing about what actually went wrong. The real reason
+            # is in requestStatus.comment, and it was being thrown away.
+            $st = $m.d.requestStatus
+            if ($st -and -not $st.result -and -not $AllowFailure) {
+                $why = if ($st.comment) { $st.comment } else { "code $($st.code)" }
+                throw "OBS request '$Type' failed: $why"
+            }
+            return $m.d
+        }
     }
 }
 
@@ -329,8 +341,23 @@ Write-Ok "OBS running (pid $($proc.Id))"
 Write-Step 'Selecting a webcam'
 $ws = Connect-ObsWs
 try {
-    $items = (Invoke-ObsRequest $ws 'GetInputPropertiesListPropertyItems' `
-        @{ inputName = 'Webcam'; propertyName = 'video_device_id' }).responseData.propertyItems
+    # OBS opens its control port BEFORE the scene collection has finished
+    # loading, so the 'Webcam' input often does not exist yet on the first ask.
+    # That request then fails, and because v5 omits responseData on failure the
+    # symptom used to be "The property 'responseData' cannot be found on this
+    # object" followed by "The camera could not start" — an alarming message for
+    # a plain startup race. Poll until the input appears instead.
+    $items = $null
+    $inputDeadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $inputDeadline) {
+        $r = Invoke-ObsRequest $ws 'GetInputPropertiesListPropertyItems' `
+             @{ inputName = 'Webcam'; propertyName = 'video_device_id' } -AllowFailure
+        if ($r.requestStatus.result) { $items = $r.responseData.propertyItems; break }
+        Start-Sleep -Milliseconds 500
+    }
+    if ($null -eq $items) {
+        throw "OBS never exposed its 'Webcam' input - the Laolao scene collection did not finish loading within 30s"
+    }
 
     $cam = $items |
         Where-Object { $_.itemEnabled -and $_.itemName -ne 'OBS Virtual Camera' } |
