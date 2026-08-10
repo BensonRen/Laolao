@@ -177,6 +177,101 @@ def test_silero_vad_not_available_when_missing(monkeypatch: pytest.MonkeyPatch) 
 # BaseVAD interface contract
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# SileroOnnxVAD — the torch-free path (real inference)
+# ---------------------------------------------------------------------------
+
+def _onnx_silero_or_skip():
+    """Build a SileroOnnxVAD, or skip if onnxruntime/weights are unavailable.
+
+    Never downloads inside a test: CI and offline runs must not depend on the
+    network, so a missing cache is a skip rather than a fetch.
+    """
+    pytest.importorskip("onnxruntime", reason="onnxruntime not installed")
+    from vad.silero_vad import SileroOnnxVAD  # noqa: PLC0415
+    if not SileroOnnxVAD.model_path({}).exists():
+        pytest.skip("silero_vad.onnx not cached — run Laolao once to fetch it")
+    return SileroOnnxVAD(cfg={})
+
+
+def _noise_dbfs(dbfs: float, n: int = 4800, seed: int = 3) -> np.ndarray:
+    """int16 gaussian noise whose RMS sits at *dbfs* relative to full scale."""
+    rng = np.random.default_rng(seed)
+    rms = (10.0 ** (dbfs / 20.0)) * 32768.0
+    return np.clip(rng.standard_normal(n) * rms, -32768, 32767).astype(np.int16)
+
+
+def test_silero_onnx_rejects_noise_at_every_level() -> None:
+    """The whole reason this backend exists.
+
+    EnergyVAD measures loudness, so steady noise above about -40 dBFS reads as
+    speech and Whisper, handed non-speech, invents captions. A neural VAD must
+    stay quiet no matter how loud the noise is.
+    """
+    vad = _onnx_silero_or_skip()
+    for dbfs in (-55, -40, -30, -20):
+        vad.reset()
+        fired = [vad.is_speech(_noise_dbfs(dbfs)) for _ in range(6)]
+        assert not any(fired), f"called steady {dbfs} dBFS noise speech: {fired}"
+
+
+def test_silero_onnx_detects_real_speech() -> None:
+    """Synthetic audio cannot validate a speech detector — use a real fixture."""
+    vad = _onnx_silero_or_skip()
+    wav = PROJECT_ROOT / "tests" / "fixtures" / "english_speech.wav"
+    if not wav.exists():
+        pytest.skip("run tests/generate_test_audio.py to create fixtures")
+
+    import wave  # noqa: PLC0415
+    with wave.open(str(wav), "rb") as wf:
+        audio = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+
+    vad.reset()
+    chunk = 4800  # 300 ms, the pipeline's default
+    fired = [vad.is_speech(audio[i:i + chunk])
+             for i in range(0, len(audio) - chunk, chunk)]
+    assert any(fired), "did not detect speech anywhere in a speech fixture"
+
+
+def test_silero_onnx_context_is_threaded_between_windows() -> None:
+    """Guards the subtlest bug in this backend.
+
+    v5 needs the last 64 samples of the previous window prepended to the next.
+    Omit it and the model still runs and still returns probabilities — they are
+    just far too low, so speech is silently never detected. Feeding the same
+    speech twice must not produce a *lower* score the second time, which is
+    what a mis-threaded context looks like.
+    """
+    vad = _onnx_silero_or_skip()
+    from vad.silero_vad import _CONTEXT_SAMPLES  # noqa: PLC0415
+    assert _CONTEXT_SAMPLES == 64
+
+    vad.reset()
+    assert vad._context.shape == (64,)
+    assert not vad._context.any(), "context must start zeroed"
+
+    window = _noise_dbfs(-20, n=512)
+    vad._probability(window.astype(np.float32) / 32768.0)
+    assert vad._context.any(), "context was not carried after a window"
+
+
+def test_silero_onnx_reset_clears_state() -> None:
+    vad = _onnx_silero_or_skip()
+    wav = PROJECT_ROOT / "tests" / "fixtures" / "english_speech.wav"
+    if not wav.exists():
+        pytest.skip("run tests/generate_test_audio.py to create fixtures")
+    import wave  # noqa: PLC0415
+    with wave.open(str(wav), "rb") as wf:
+        audio = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+
+    for i in range(0, min(len(audio), 4800 * 4), 4800):
+        vad.is_speech(audio[i:i + 4800])
+    vad.reset()
+    assert vad._speaking is False
+    assert not vad._state.any(), "LSTM state must be zeroed by reset()"
+    assert not vad._context.any(), "context must be zeroed by reset()"
+
+
 def test_base_vad_reset_default_noop() -> None:
     """BaseVAD.reset() is a no-op by default (EnergyVAD overrides it)."""
     from vad.base import BaseVAD
