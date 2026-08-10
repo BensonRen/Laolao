@@ -321,47 +321,140 @@ def a6():
 # A7 / A8 — virtual camera exists and enumerates
 # ─────────────────────────────────────────────────────────────────────
 
-def _enumerate_cameras() -> list[str]:
-    """List video capture device names the way a consumer app would."""
-    names: list[str] = []
-    ps = (
+def _ps(cmd: str) -> list[str]:
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", cmd],
+                             capture_output=True, text=True, timeout=60)
+        return [l.strip() for l in out.stdout.splitlines() if l.strip()]
+    except Exception:
+        return []
+
+
+def _pnp_cameras() -> list[str]:
+    """Hardware cameras, as the PnP subsystem sees them."""
+    return _ps(
         "Get-CimInstance Win32_PnPEntity | "
         "Where-Object { $_.PNPClass -eq 'Camera' -or $_.PNPClass -eq 'Image' -or "
         "$_.Service -eq 'usbvideo' } | Select-Object -ExpandProperty Name"
     )
+
+
+# CLSID_VideoInputDeviceCategory — where DirectShow capture sources register.
+DSHOW_CAT = "{860BB310-5D01-11D0-BD3B-00A0C911CE86}"
+
+
+def _dshow_filters() -> list[dict]:
+    """Software DirectShow capture filters (e.g. OBS Virtual Camera).
+
+    These are COM servers, NOT PnP devices — a virtual camera is invisible to
+    Win32_PnPEntity no matter how correctly it is installed. Enumerating the
+    wrong namespace here produces a confident false negative.
+    """
+    # NB: build this without f-strings — the PowerShell body is full of braces,
+    # and an earlier f-string version silently produced a path expression that
+    # PowerShell never evaluated, so every DLL came back empty.
+    template = (
+        "$root='%ROOT%';"
+        "$c=Join-Path $root '%CAT%\\Instance';"
+        "if (Test-Path $c) { Get-ChildItem $c | ForEach-Object {"
+        "  $n=$_.PSChildName;"
+        "  $f=(Get-ItemProperty $_.PSPath).FriendlyName;"
+        "  $ip=Join-Path $root ($n + '\\InprocServer32');"
+        "  $s='';"
+        "  if (Test-Path $ip) { $s=(Get-ItemProperty $ip).'(default)' }"
+        "  \"$n|$f|$s\""
+        "} }"
+    )
+    found: dict[str, dict] = {}
+    for view, root in (("64", "HKLM:\\SOFTWARE\\Classes\\CLSID"),
+                       ("32", "HKLM:\\SOFTWARE\\Classes\\WOW6432Node\\CLSID")):
+        cmd = template.replace("%ROOT%", root).replace("%CAT%", DSHOW_CAT)
+        for line in _ps(cmd):
+            parts = line.split("|")
+            if len(parts) < 2:
+                continue
+            clsid, name, dll = parts[0], parts[1], (parts[2] if len(parts) > 2 else "")
+            e = found.setdefault(clsid, {"clsid": clsid, "name": name, "views": [], "dll": ""})
+            e["views"].append(view)
+            if dll and not e["dll"]:
+                e["dll"] = dll
+    return list(found.values())
+
+
+_PE_MACHINES = {0x8664: "AMD64(x64)", 0x014C: "i386(x86)",
+                0xAA64: "ARM64", 0x01C4: "ARMv7"}
+
+
+def _pe_machine(path: str) -> str:
+    """Read a PE file's machine type — decides who can load it in-process."""
     try:
-        out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                             capture_output=True, text=True, timeout=60)
-        names = [l.strip() for l in out.stdout.splitlines() if l.strip()]
-    except Exception:
-        pass
-    return names
+        with open(path, "rb") as f:
+            if f.read(2) != b"MZ":
+                return "not-PE"
+            f.seek(0x3C)
+            off = int.from_bytes(f.read(4), "little")
+            f.seek(off)
+            if f.read(4) != b"PE\0\0":
+                return "bad-PE"
+            m = int.from_bytes(f.read(2), "little")
+        return _PE_MACHINES.get(m, f"0x{m:04x}")
+    except Exception as e:
+        return f"unreadable ({e.__class__.__name__})"
 
 
-@check("A7", "a Laolao/OBS virtual camera device is present")
+def _is_virtual(name: str) -> bool:
+    n = name.lower()
+    return "obs" in n or "laolao" in n or "virtual" in n
+
+
+@check("A7", "a Laolao/OBS virtual camera is registered")
 def a7():
-    names = _enumerate_cameras()
-    hits = [n for n in names if "obs" in n.lower() or "laolao" in n.lower()
-            or "virtual" in n.lower()]
-    if not names:
-        return _r("A7", a7.title, BLOCKED, "camera enumeration returned nothing")
-    return _r("A7", a7.title, PASS if hits else FAIL,
-              f"virtual={hits} all_devices={names}", virtual=hits, all=names)
+    hw = _pnp_cameras()
+    filters = _dshow_filters()
+    virt = [f for f in filters if _is_virtual(f["name"])]
+    ev = (f"dshow_filters={[(f['name'], 'views=' + '/'.join(f['views'])) for f in filters]}  "
+          f"pnp_hardware={hw}")
+    if not virt:
+        return _r("A7", a7.title, FAIL, "no virtual camera filter registered.  " + ev,
+                  filters=filters, hardware=hw)
+    return _r("A7", a7.title, PASS, ev, virtual=virt, filters=filters, hardware=hw)
 
 
-@check("A8", "virtual camera is selectable by a capture consumer")
+@check("A8", "virtual camera is loadable by the call apps that must use it")
 def a8():
-    """PnP presence is not proof. A consumer must be able to OPEN it."""
-    names = _enumerate_cameras()
-    hits = [n for n in names if "obs" in n.lower() or "laolao" in n.lower()]
-    if not hits:
+    """Registration is not loadability.
+
+    A DirectShow filter is loaded *in-process* by the consumer, so the filter
+    DLL's machine type decides who can actually open it. On Windows ARM64 the
+    registry entry is visible to native-ARM64 apps too, which then fail at
+    CoCreateInstance — visible but unusable is a real and confusing outcome,
+    so it is graded separately from A7.
+    """
+    virt = [f for f in _dshow_filters() if _is_virtual(f["name"])]
+    if not virt:
         return _r("A8", a8.title, BLOCKED, "no virtual camera registered yet (see A7)")
-    return _r("A8", a8.title, SKIP,
-              "requires opening the device from a real consumer and reading a "
-              "non-black frame — see WS-C findings for the x64-emulation verdict "
-              "(WeChat/Zoom are emulated x64; an ARM64-only DirectShow filter "
-              "may be invisible to them)",
-              candidates=hits)
+
+    report, arm64_ok, x64_ok = [], False, False
+    for f in virt:
+        dll = (f.get("dll") or "").strip('"')
+        mach = _pe_machine(dll) if dll else "no InprocServer32 recorded"
+        report.append(f"{f['name']}: dll={dll or '?'} machine={mach} "
+                      f"registry_views={'/'.join(f['views'])}")
+        if mach == "ARM64":
+            arm64_ok = True
+        if mach == "AMD64(x64)":
+            x64_ok = True
+
+    # WeChat / Zoom on Windows-ARM64 are x64 images running under Prism.
+    verdict = ("x64-emulated call apps CAN load it" if x64_ok
+               else "NO x64 filter — emulated call apps cannot load it")
+    native = ("native ARM64 producers can load it" if arm64_ok
+              else "native ARM64 producers CANNOT load it (must drive the camera "
+                   "from an emulated-x64 helper process or out-of-process OBS)")
+    status = PASS if x64_ok else FAIL
+    return _r("A8", a8.title, status,
+              "; ".join(report) + f"  ->  {verdict}; {native}",
+              filters=virt, x64_loadable=x64_ok, arm64_loadable=arm64_ok)
 
 
 # ─────────────────────────────────────────────────────────────────────

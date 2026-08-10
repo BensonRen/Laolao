@@ -25,16 +25,29 @@ the user asks.
 
 | # | Criterion | State |
 |---|---|---|
-| A1 | server.py boots on ARM64 python, no ctranslate2 | ⬜ not started |
-| A2 | known WAV → correct transcript | ⬜ not started |
-| A3 | Mandarin → Simplified Chinese output | ⬜ not started |
-| A4 | latency partial <1.0s / final <2.0s | ⬜ not started |
+| A1 | server.py boots on ARM64 python, no ctranslate2 | 🔄 dispatcher routes to ONNX; backend not yet available |
+| A2 | known WAV → correct transcript | ⚠️ proven in the **emulated** lane (`jfk.wav` character-exact); not yet native |
+| A3 | Mandarin → Simplified Chinese output | ⚠️ proven in the **emulated** lane (output already Simplified); not yet native |
+| A4 | latency partial <1.0s / final <2.0s | ❌ **REFUTED for emulation** (3–10× over budget). Native lane is now the only route. |
 | A5 | VAD gates speech vs silence | ⬜ not started |
 | A6 | live mic → overlay captions | ⬜ not started |
-| A7 | webcam + captions → virtual camera pixels | ⬜ not started |
-| A8 | camera selectable in a call app picker | ⬜ not started |
+| A7 | virtual camera registered | ✅ **PASS** — `OBS Virtual Camera` in DirectShow category, views 64/32 |
+| A8 | camera loadable by the call apps that need it | ✅ **PASS** — filter DLL is `AMD64(x64)`, so x64-emulated WeChat/Zoom can load it |
 | A9 | fully offline operation | ⬜ not started |
 | A10 | one-click launch for a non-technical user | ⬜ not started |
+
+> **A7/A8 caveat, and why they are graded separately.** Registration is not
+> loadability. The filter is registered in the 64-bit registry view, so a
+> *native ARM64* app enumerates "OBS Virtual Camera" happily and then fails at
+> `CoCreateInstance`, because the DLL behind it is AMD64. Visible-but-unusable
+> is a real failure mode; A8 exists to catch it.
+>
+> **The harness itself was wrong first.** A7 originally enumerated
+> `Win32_PnPEntity` and confidently reported FAIL — but a virtual camera is a
+> COM filter, not a PnP device, so that check could never have passed no matter
+> how correct the install was. Fixed to enumerate
+> `CLSID\{860BB310-5D01-11D0-BD3B-00A0C911CE86}\Instance`. Worth remembering:
+> a green/red light from the wrong namespace is worse than no light at all.
 
 Legend: ⬜ not started · 🔄 in progress · ✅ proven with evidence · ❌ blocked · ⚠️ partial
 
