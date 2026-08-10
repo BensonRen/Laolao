@@ -69,6 +69,9 @@ $SetupPs1    = Join-Path $PSScriptRoot 'setup-arm64.ps1'
 $VCamPs1     = Join-Path $PSScriptRoot 'findings\laolao-vcam-setup.ps1'
 $ObsRoot     = Join-Path $ToolsRoot 'obs-arm64'
 $ObsExe      = Join-Path $ObsRoot 'bin\64bit\obs64.exe'
+# Where the ONNX/QNN backend caches models. Must match what the backend
+# computes (<repo>\..\laolao-tools\models) or its LAOLAO_MODEL_DIR override.
+$ModelDir    = if ($env:LAOLAO_MODEL_DIR) { $env:LAOLAO_MODEL_DIR } else { Join-Path $ToolsRoot 'models' }
 $RunDir      = Join-Path $ToolsRoot 'run'
 $PidFile     = Join-Path $RunDir 'server.pid'
 $LogOut      = Join-Path $RunDir 'server.log'
@@ -128,6 +131,26 @@ function Test-VCamArch {
 }
 
 function Get-ObsProcess { return (Get-Process obs64 -ErrorAction SilentlyContinue | Select-Object -First 1) }
+
+# EXACTLY ONE process may hold the physical webcam. OBS is about to take it,
+# and WS-E watched the Electron shell take NotReadableError four times and then
+# sit at black=true forever while OBS held the device. The two shells are
+# mutually exclusive at runtime, so the OBS path actively evicts the other one
+# rather than letting the user discover a dead self-view mid-call.
+# Only processes whose image lives inside this checkout are touched.
+function Stop-ElectronShell {
+    $killed = @()
+    $root = $RepoRoot.ToLower()
+    foreach ($p in (Get-Process electron, Laolao -ErrorAction SilentlyContinue)) {
+        $path = ''
+        try { $path = "$($p.Path)".ToLower() } catch { }
+        if ($path -and $path.StartsWith($root)) {
+            Stop-Tree -RootPid $p.Id
+            $killed += "$($p.ProcessName) (pid $($p.Id))"
+        }
+    }
+    return $killed
+}
 
 # The engine is a small chain: run-engine.cmd -> venv python.exe -> the real
 # interpreter (the venv python on Windows is a stub that re-execs its base and
@@ -217,6 +240,13 @@ if (-not (Test-Path $VenvPy)) {
     & $VenvPy -c 'import onnxruntime,numpy,sounddevice,websockets,tokenizers,opencc' 2>$null
     if ($LASTEXITCODE -ne 0) { $missing += 'some Python packages' }
 }
+# The Whisper NPU asset is a ~180 MB download that onnxruntime-qnn fetches over
+# plain urllib on first use. Left to happen at launch it is an invisible
+# multi-minute stall with the call already ringing, so drag it into setup where
+# it can be announced.
+if (-not (Get-ChildItem $ModelDir -Directory -ErrorAction SilentlyContinue)) {
+    $missing += 'the speech model (a one-time download)'
+}
 
 if ($Setup -or $missing.Count) {
     if ($missing.Count) { Write-Warn2 "first run - still needed: $($missing -join ', ')" }
@@ -261,10 +291,12 @@ if ($owner) {
     # though the launcher itself finished seconds ago. Verified: the acceptance
     # harness hung for 10 minutes on exactly this. ShellExecute (what
     # Start-Process does with no redirection) inherits nothing.
+    $modelEnv = if ($env:LAOLAO_MODEL_DIR) { "set LAOLAO_MODEL_DIR=$env:LAOLAO_MODEL_DIR" } else { 'rem model dir: backend default' }
     @"
 @echo off
 cd /d "$RepoRoot"
 set PYTHONIOENCODING=utf-8
+$modelEnv
 "$VenvPy" server.py > "$LogOut" 2> "$LogErr"
 "@ | Set-Content $EngineCmd -Encoding ASCII
 
@@ -303,6 +335,13 @@ if ($NoCamera) {
     Write-Step '[3/4] Camera skipped (-NoCamera)'
 } else {
     Write-Step '[3/4] Starting the camera'
+    # @() because a function returning nothing yields $null, not an empty
+    # array, and under Set-StrictMode $null.Count is a hard error.
+    $evicted = @(Stop-ElectronShell)
+    if ($evicted.Count) {
+        Write-Warn2 "closed the Laolao app window ($($evicted -join ', ')) - only one"
+        Write-Warn2 'program can hold the webcam, and OBS is taking it'
+    }
     $obs = Get-ObsProcess
     if ($obs -and (Test-Listening $OBS_WS_PORT) -and (Test-VCamArch $Arch)) {
         Write-Ok "already running (pid $($obs.Id)) - reusing it"

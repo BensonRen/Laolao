@@ -81,19 +81,24 @@ narrower: which one can a non-technical person get working?
 | Processes to get right | 2 (`server.py`, `obs64.exe`) | 4 (`server.py` ARM64, Electron ARM64, `virtual_cam.py` x64, OBS filter) |
 | Python environments | 1 native ARM64 | **2** — plus an x64 Python install, which is a second manual download |
 | Node/npm/Electron | not needed | needed: ~310 packages, and npm 11 withholds Electron's postinstall behind `allow-scripts` (WS-D H-401) |
-| Blocking failure on a clean machine | none found | `main.js:28` hardcodes `<root>/venv/Scripts/python.exe`; the ARM64 port has no `venv/`, so **both children die on spawn** and the supervisor gives up in ~15 s (WS-D, verbatim) |
-| Second blocking failure | — | `checkObs()` is awaited *before* the windows are created and OBS writes no registry key here, so the first run produces **zero windows** and a modal "OBS Studio Not Found" (WS-D H-402) |
-| Third | — | on this 1024×768 desktop the output window is clamped to 1008×720, and the aspect-safe crop then throws away 21% of the frame height — **the captions get clipped** (WS-D #8) |
-| Fixes required in `electron/main.js` | none | at least 4, and WS-G is explicitly barred from touching that file |
+| Blocking failure on a clean machine | none found | ~~`main.js:28` hardcodes `<root>/venv/Scripts/python.exe`~~ — **fixed by WS-E while this was being written**; `venvPyFor()` now walks `venv` → `.venv-arm64` → `.venv` and honours `LAOLAO_PYTHON` |
+| Second blocking failure | — | `checkObs()` is awaited *before* the windows are created and OBS writes no registry key here, so the first run produces **zero windows** and a modal "OBS Studio Not Found" (WS-D H-402) — still open |
+| Third | — | on this 1024×768 desktop the output window is clamped to 1008×720, and the aspect-safe crop then throws away 21% of the frame height — **the captions get clipped** (WS-D #8) — still open |
+| Fixes required in `electron/main.js` | none | 3 remaining, and WS-G is barred from touching that file |
 | Product UX | caption monitor window + OBS in the tray | real control window, toolbar, language switch, live preview |
 | Echo cancellation | **no** — see the honest caveat below | yes (Chromium `getUserMedia`) |
 
-Path (b) is the better product. It is not the shippable one *today*: three of
-its four failure modes hit on the very first launch of a clean ARM64 machine,
-all of them live in a file this workstream must not modify, and two of them
-look to the user exactly like "the app is broken". Path (a) has one moving
-part, no `pyvirtualcam`, no x64 Python, no Node, and WS-C already proved it
-from a torn-down state.
+Path (b) is the better product. It is not the shippable one *today*: its
+remaining failure modes hit on the very first launch of a clean ARM64 machine,
+they live in a file this workstream must not modify, and both look to the user
+exactly like "the app is broken". Path (a) has one moving part, no
+`pyvirtualcam`, no x64 Python, no Node, and WS-C already proved it from a
+torn-down state.
+
+(WS-E's fix to `venvPyFor()` removed the worst of (b)'s blockers mid-flight.
+That narrows the gap; it does not close it. The modal-before-any-window and the
+clipped-captions crop are both still there, and (b) still needs an x64 Python
+install that (a) does not.)
 
 **Path (b) stays documented as the alternative**, and it becomes the right
 default the moment WS-D's items 1–4 land in `main.js`. Nothing in this
@@ -110,10 +115,43 @@ transcribed and shown as *your* caption. On this path, **use a headset** — it
 is now in the README's ARM64 section as a requirement, not a tip.
 
 **No toolbar.** Language, colours and caption position are not switchable
-mid-call; they come from `config.json` and URL parameters. `Laolao-arm64.bat`
-opens the overlay in display-only mode (`?output=1`), which deliberately opens
-neither the camera nor the microphone — so it can never fight OBS for the
-webcam or double-feed audio to the engine.
+mid-call; they come from `config.json` and URL parameters.
+
+---
+
+## How the launcher guarantees exactly one camera consumer
+
+WS-E's audit is the reason this section exists: it watched the Electron shell
+take `NotReadableError` four times and then sit at `black=true` forever while
+OBS held the webcam. The two shells are mutually exclusive at runtime, so
+"pick one" is not enough — the launcher has to *enforce* it. Three mechanisms,
+covering the three ways a second consumer could appear:
+
+1. **The launcher never starts Electron.** `launch.ps1` spawns exactly two
+   things: `server.py` (audio only, no camera) and `obs64.exe`. There is no
+   code path in it that runs the Electron shell.
+2. **It evicts an Electron shell that is already running**, immediately before
+   OBS takes the device, and says so in plain language. Only processes whose
+   image path is inside this checkout are touched — someone else's `electron.exe`
+   is left alone:
+
+   ```
+   electron procs before: 4
+   ==> [3/4] Starting the camera
+       closed the Laolao app window (electron (pid 3352), electron (pid 24560)) - only one
+       program can hold the webcam, and OBS is taking it
+   electron procs after: 0
+   ```
+3. **The caption window cannot become a third consumer.** It loads the overlay
+   with `?output=1`, and `outputStartCamera()` returns early unless
+   `localStorage` already holds a camera id (`overlay/index.html:1496` —
+   "Never fall back to `video: true` here"). Because the window runs in its own
+   `--user-data-dir` created by the launcher, that storage starts empty and
+   stays empty — output mode never writes it. So the guarantee is structural,
+   not a lucky default.
+
+The reverse direction is served too: `Laolao-stop.bat` stops OBS and releases
+the webcam, which is what someone switching to the Electron path needs first.
 
 ---
 
@@ -272,7 +310,36 @@ The old check passed that stub. This one does not.
 
 ---
 
-## Three bugs found while validating
+## Two things WS-E's audit forced into the setup script
+
+**The one-time download is announced, and it is pulled during setup, not at
+launch.** `onnxruntime-qnn` fetches its ~180 MB QNN asset over plain `urllib`
+from S3, and `HF_HUB_OFFLINE` has no effect on it — so the first run genuinely
+needs a network even though steady state does not. Leaving that to happen on
+first launch means a silent multi-minute stall with the call already ringing.
+`setup-arm64.ps1` now says so before it starts:
+
+```
+==> Speech model for the Hexagon NPU
+    one-time download of about 200 MB - this needs internet.
+    After this, Laolao never touches the network again.
+BACKEND_OK QnnWhisperBackend in 1.4s
+```
+
+and `launch.ps1` treats an empty model cache as "setup not finished", so the
+download can never be the thing that happens invisibly at launch.
+
+**Long install paths are checked, because that failure is silent.** A deep path
+makes the QNN asset extract incompletely; the backend then falls back to the
+CPU provider and runs ~25× slower with nothing in the log to explain it. Setup
+measures the model directory and, past 90 characters, says exactly what to do
+(`setx LAOLAO_MODEL_DIR C:\laolao-models`). `launch.ps1` propagates
+`LAOLAO_MODEL_DIR` into the engine's environment so the override actually
+survives into the running server.
+
+---
+
+## Four bugs found while validating
 
 **1. The launcher hung any script that captured its output — for 10 minutes.**
 `Start-Process -RedirectStandardOutput` makes PowerShell create the child with
@@ -305,7 +372,24 @@ Failed to create a ProcessSingleton for your profile directory ... Aborting now
 No window, no error the launcher could see. Fix: the caption window gets its
 own `--user-data-dir` under `laolao-tools\run\`, so it never contends with the
 user's browser session (and never inherits their extensions or session
-restore).
+restore). That fix turned out to also be what makes the single-consumer
+guarantee above structural.
+
+**4. The strengthened check caught a regression in the launcher within minutes
+of it being written.** The webcam-eviction guard used `$evicted.Count`, and a
+PowerShell function that returns nothing yields `$null`, not an empty array —
+so under `Set-StrictMode` the launcher died at step 3 on every machine with no
+Electron running, which is every normal machine:
+
+```
+[FAIL ] A10  launcher exited 1 after 4s
+  ==> [3/4] Starting the camera
+  launch.ps1 : The property 'Count' cannot be found on this object.
+```
+
+The old file-existence check would have reported PASS for that launcher. This
+is the clearest argument for the rewrite that this workstream can offer: the
+check earned its keep on its author's own code, an hour after being written.
 
 ---
 

@@ -195,6 +195,23 @@ Write-Ok 'skipped by design: silero-vad, faster-whisper, pyvirtualcam (no win-ar
 # turns into a silent 3-minute download while grandma waits on the call.
 if (-not $SkipModel) {
     Write-Step 'Speech model for the Hexagon NPU'
+
+    # Long paths break the QNN asset extraction SILENTLY: the model falls back
+    # to the CPU provider and runs ~25x slower with nothing in the log to say
+    # why. Cheap to check, impossible to diagnose later.
+    $ModelDir = if ($env:LAOLAO_MODEL_DIR) { $env:LAOLAO_MODEL_DIR } else { Join-Path $ToolsRoot 'models' }
+    if ($ModelDir.Length -gt 90) {
+        Write-Bad  "The model folder path is $($ModelDir.Length) characters long:"
+        Write-Bad  "  $ModelDir"
+        Write-Bad  'Deep paths make the NPU model extract incompletely, and the only'
+        Write-Bad  'symptom is that captions become ~25x slower. Move Laolao closer to'
+        Write-Bad  'the root of the drive, or set LAOLAO_MODEL_DIR to something short:'
+        Write-Bad  '  setx LAOLAO_MODEL_DIR C:\laolao-models'
+        Write-Warn2 'continuing anyway - but do not trust the latency numbers'
+    }
+
+    Write-Warn2 'one-time download of about 200 MB - this needs internet.'
+    Write-Warn2 'After this, Laolao never touches the network again.'
     $probe = Join-Path ([IO.Path]::GetTempPath()) 'laolao_warm_model.py'
     @'
 import json, os, sys, time

@@ -254,6 +254,9 @@ webcam back to other apps.
 | **No echo cancellation** | The mic is captured by Python, not by Chromium | **Wear a headset.** On speakers, the other person's voice gets transcribed as your caption |
 | No toolbar / hot-swap language | There is no Electron control window on this path | Language, colours and caption size come from `config.json` and the overlay's URL parameters |
 | **The camera works for x64 apps *or* ARM64 apps, not both** | Windows-on-ARM64 has a single 64-bit COM slot for the camera, and OBS ships no ARM64X filter | Default is x64, which is what WeChat, Zoom and Teams are. If the camera shows up in the picker but the picture is **black**, your app is ARM64-native — run `Laolao-arm64.bat -Arch arm64` |
+| Don't run the Electron app at the same time | Only one program can hold the physical webcam; the other one gets a black feed | The launcher closes Laolao's Electron window for you before OBS takes the camera |
+| First run needs internet | The NPU model is a one-time ~200 MB download | Setup says so before it starts. After that Laolao never touches the network |
+| Keep the folder path short | A deep install path makes the NPU model extract incompletely, and the only symptom is captions becoming ~25× slower — nothing errors | Setup warns past 90 characters. `setx LAOLAO_MODEL_DIR C:\laolao-models` moves just the model cache |
 | `run.bat` / `setup.bat` don't apply | They install `faster-whisper` and expect a `venv\` | Use `Laolao-arm64.bat`; it maintains `.venv-arm64` |
 
 Full engineering detail — including the alternative Electron + emulated-x64
@@ -512,6 +515,10 @@ portrait view.
 
 **Snapdragon/ARM64: my captions include the other person's voice**
 - There is no echo cancellation on this path (Python captures the mic directly, not Chromium). Use a headset
+
+**Snapdragon/ARM64: captions are suddenly much slower than the ~90 ms they should be**
+- Almost always the install path being too long: the Qualcomm NPU model extracts incompletely and the backend silently falls back to the CPU. Move Laolao nearer the root of the drive, or `setx LAOLAO_MODEL_DIR C:\laolao-models` and re-run `Laolao-arm64.bat -Setup`
+- Also check the engine log for `Model 'small' has no Qualcomm NPU export` — only `tiny`, `base` and `large-v3-turbo` run on the NPU
 
 ---
 
