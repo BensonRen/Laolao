@@ -175,7 +175,46 @@ server actually uses). Each cell is the **median of 5 timed passes after a warm-
 Window sizes mirror what `server.py` really feeds Whisper: a growing rolling partial
 buffer, and the `rolling_window_s` final commit (config default 4.0 s; README default 5.0 s).
 
-<!--LATENCY_TABLE-->
+**Utterance under test:** `asr_example_zh.wav` (5.55 s of continuous Mandarin) and
+`jfk.wav` (11.00 s of continuous English), sliced to the leading window shown.
+
+### `base` — median ms per transcription pass
+
+| Pass shape (window) | zh | en | A4 budget | Verdict |
+|---|---:|---:|---:|---|
+| partial, 1.0 s buffer | **3 474** | **4 768** | 1 000 | ❌ 3.5–4.8× over |
+| partial, 2.0 s buffer | **3 652** | **3 220** | 1 000 | ❌ 3.2–3.7× over |
+| final, 4.0 s window | **3 165** | **3 019** | 2 000 | ❌ 1.5–1.6× over |
+| final, 5.0 s window | **3 178** | **3 386** | 2 000 | ❌ 1.6–1.7× over |
+
+Spread (min…max over the 5 timed passes): zh partial-2.0 s 3 067…8 268 ms;
+en final-4.0 s 2 820…11 422 ms. Cold model load: **20.5 s** on first ever run
+(includes the 142 MB download), **6.4 s** from warm cache.
+
+### `small` — median ms per transcription pass
+
+| Pass shape (window) | zh | en | A4 budget | Verdict |
+|---|---:|---:|---:|---|
+| partial, 1.0 s buffer | **13 911** | **12 537** | 1 000 | ❌ 12.5–13.9× over |
+| partial, 2.0 s buffer | **12 578** | **12 132** | 1 000 | ❌ 12.1–12.6× over |
+| final, 4.0 s window | **14 124** | **12 321** | 2 000 | ❌ 6.2–7.1× over |
+| final, 5.0 s window | *not captured* | *not captured* | 2 000 | process died, see below |
+
+Cold model load: **12.9 s** from warm cache (461 MB download preceded it).
+
+The `small` run terminated with **exit 255** during the last probe. Cause was memory
+pressure, not a code fault — `Get-CimInstance Win32_OperatingSystem` reported only
+**2 639 MB free physical RAM** at that moment, with four agents' Python processes
+resident simultaneously. The three probes that did complete already settle the
+hypothesis by an order of magnitude, so I did not re-run it.
+
+> **Measurement honesty.** These runs shared the machine with the other workstreams'
+> agents; sampled CPU load was **96–99 %** for much of the benchmark, so the medians are
+> an **upper bound**, not a quiet-machine figure. That caveat cannot rescue the result:
+> even the fastest single pass ever observed (`base`, en, final-4.0 s) was **2 820 ms**,
+> still over the 2 000 ms final budget, and `base` would have to get **3.5× faster** to
+> meet the partial budget. The clean re-measurement below isolates the machine-contention
+> and thread-count variables directly.
 
 ### Why the numbers are flat
 

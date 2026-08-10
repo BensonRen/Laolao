@@ -29,7 +29,7 @@ the user asks.
 | A2 | known WAV → correct transcript | ⚠️ proven in the **emulated** lane (`jfk.wav` character-exact); not yet native |
 | A3 | Mandarin → Simplified Chinese output | ⚠️ proven in the **emulated** lane (output already Simplified); not yet native |
 | A4 | latency partial <1.0s / final <2.0s | ❌ **REFUTED for emulation** (3–10× over budget). Native lane is now the only route. |
-| A5 | VAD gates speech vs silence | ⬜ not started |
+| A5 | VAD gates speech vs silence | ✅ **PASS** (EnergyVAD; Silero not yet installed natively) |
 | A6 | live mic → overlay captions | ⬜ not started |
 | A7 | virtual camera registered | ✅ **PASS** — `OBS Virtual Camera` in DirectShow category, views 64/32 |
 | A8 | camera loadable by the call apps that need it | ✅ **PASS** — filter DLL is `AMD64(x64)`, so x64-emulated WeChat/Zoom can load it |

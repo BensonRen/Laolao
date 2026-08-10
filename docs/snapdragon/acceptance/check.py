@@ -237,21 +237,59 @@ def a4():
 
 @check("A5", "VAD gates speech vs silence")
 def a5():
+    """Feed *sequences*, not single chunks, and use *real* speech.
+
+    Two traps this check exists to avoid:
+
+    - EnergyVAD applies a 3-frame majority filter, so it cannot report speech
+      until two consecutive active chunks have arrived. A one-chunk probe
+      always returns False and looks like a broken VAD.
+    - Silero is a neural *speech* detector. Loud random noise is correctly
+      rejected by it, so synthetic noise would fail a working Silero while
+      passing a working EnergyVAD. Only real speech tests both.
+    """
     import numpy as np
     from vad import get_vad
     cfg = json.loads((REPO / "config.json").read_text())
     v = get_vad(cfg)
-
+    name = type(v).__name__
     n = int(16000 * (cfg.get("chunk_ms", 300) / 1000))
-    silence = np.zeros(n, dtype=np.int16)
-    speech = (np.random.randn(n) * 6000).astype(np.int16)
 
-    s_sil, s_spk = v.is_speech(silence), v.is_speech(speech)
-    ok = (not s_sil) and s_spk
-    return _r("A5", a5.title, PASS if ok else FAIL,
-              f"vad={type(v).__name__} silence->{s_sil} loud->{s_spk} "
-              "(want False/True)",
-              vad=type(v).__name__, silence=bool(s_sil), speech=bool(s_spk))
+    wav = find_fixture("english_speech", "chinese_speech", "jfk", "english", "fleurs")
+    if wav is None:
+        return _r("A5", a5.title, BLOCKED,
+                  f"vad={name} but no speech fixture available; synthetic noise "
+                  "cannot validate a neural VAD", vad=name)
+
+    src = read_wav_int16(wav)
+    # Anchor on the loudest window so we test speech, not leading silence.
+    if len(src) > n * 8:
+        rms = [(float(np.sqrt(np.mean((src[i:i + n].astype(np.float32) / 32768) ** 2))), i)
+               for i in range(0, len(src) - n, n)]
+        start = max(rms)[1]
+    else:
+        start = 0
+
+    reps = 6
+    v.reset()
+    sil = [bool(v.is_speech(np.zeros(n, dtype=np.int16))) for _ in range(reps)]
+    v.reset()
+    spk = []
+    for k in range(reps):
+        c = src[start + k * n: start + (k + 1) * n]
+        if len(c) < n:
+            c = np.pad(c, (0, n - len(c)))
+        spk.append(bool(v.is_speech(c)))
+
+    detect_at = next((i + 1 for i, s in enumerate(spk) if s), None)
+    ok = (not any(sil)) and any(spk)
+    ev = (f"vad={name} fixture={wav.name}  silence={sil} (want all False)  "
+          f"speech={spk} (want some True)")
+    if detect_at:
+        ev += f"  detected after {detect_at} chunk(s) = {detect_at * n / 16000:.2f}s"
+    return _r("A5", a5.title, PASS if ok else FAIL, ev,
+              vad=name, silence=sil, speech=spk, detect_chunk=detect_at,
+              fixture=str(wav))
 
 
 # ─────────────────────────────────────────────────────────────────────
