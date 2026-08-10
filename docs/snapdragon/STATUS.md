@@ -55,16 +55,32 @@ Legend: ⬜ not started · 🔄 in progress · ✅ proven with evidence · ❌ b
 
 | ID | Workstream | Owner | State | Notes |
 |---|---|---|---|---|
-| WS-A | STT native ARM64 (ONNX CPU → QNN NPU) | agent | 🔄 launched | H-100..H-105. Highest risk, highest value. |
-| WS-B | STT via x64 Prism emulation (fallback) | agent | 🔄 launched | H-200..H-203. Near-certain; guarantees a shippable build. |
-| WS-C | OBS ARM64 + virtual camera | agent | 🔄 launched | H-300..H-305. OBS ARM64 zip exists. |
-| WS-D | Node.js + Electron ARM64 shell | agent | 🔄 launched | H-400..H-403. |
-| WS-F | Ground-truth audio fixtures | agent | 🔄 launched | Unblocks A2/A3. `tests/generate_test_audio.py` only synthesizes speech on **macOS** — on Windows it emits silence + a sine tone, so no STT result here was verifiable. Windows SAPI has en-US voices only; **no Chinese voice/language pack**, and installing one is interactive so Mandarin ground truth must be sourced externally. |
-| WS-E | End-to-end verification | agent | ⬜ | Runs only once A-criteria have candidates. Grades against `acceptance/check.py`. |
+| WS-A | STT native ARM64 (ONNX CPU → QNN NPU) | agent | ✅ **done — lane winner** | Whisper on the **Hexagon NPU** via `onnxruntime-qnn` + Qualcomm AI Hub's precompiled export for `qualcomm-snapdragon-x2-elite`. base ~130 ms, large-v3-turbo ~530 ms. H-100..H-105 all confirmed. |
+| WS-B | STT via x64 Prism emulation (fallback) | agent | ✅ done — **not shippable as primary** | Accurate but 3–12× over the latency budget. `tiny` is the only near-viable size. Kept as a documented degraded fallback. Found the x64-only DShow filter constraint. |
+| WS-C | OBS ARM64 + virtual camera | agent | ✅ done | OBS ARM64 composites webcam + overlay browser source and publishes the camera itself — `pyvirtualcam` not needed. Registration works **per-user, no admin**. |
+| WS-D | Node.js + Electron ARM64 shell | agent | ✅ done | Node/Electron/electron-builder all native arm64. Proved the full path: ARM64 Electron → TCP → emulated x64 sink → OBS filter → x64 consumer. Found the silent caption-cropping bug. |
+| WS-F | Ground-truth audio fixtures | agent | ✅ done | Added a Windows SAPI path to the macOS-only generator; sourced AISHELL-1 (Apache-2.0) for Mandarin ground truth, parsed from the corpus transcript rather than typed in. |
+| WS-G | One-click launcher (A10) | agent | 🔄 running | The last unproven criterion. |
+| WS-E | Independent adversarial verification | agent | 🔄 running | Auditing the harness as much as the port — it has already been wrong three times. |
 
-Wave 1 launched 2026-08-09. Each agent writes only to its own
-`findings/WS-<id>-*.md`; the orchestrator merges results into this file and
-`HYPOTHESES.md` to avoid concurrent-edit conflicts.
+Wave 1 launched 2026-08-09 23:56; wave 2 (WS-G, WS-E) 2026-08-10 00:50. Each agent
+writes only to its own `findings/WS-<id>-*.md`; the orchestrator merges results into
+this file and `HYPOTHESES.md` to avoid concurrent-edit conflicts.
+
+## Decided architecture
+
+```
+native ARM64  server.py  ──WebSocket :8765──▶  overlay (captions)
+   └─ QnnWhisperBackend on the Hexagon NPU, EnergyVAD
+
+camera, either:
+ (a) OBS ARM64 composites webcam + overlay browser source → its own virtual camera
+ (b) native ARM64 Electron ──JPEG/TCP :8766──▶ emulated x64 virtual_cam.py → OBS DShow filter
+                                                        ▲ only this thin sink is emulated
+```
+
+Emulation is used for exactly one thing — the frame sink — because that is the one
+part it handles well (A8) and STT is the part it ruins (A4).
 
 ## Isolation rules (avoid agents stomping each other)
 
