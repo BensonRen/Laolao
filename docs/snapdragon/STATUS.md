@@ -25,10 +25,10 @@ the user asks.
 
 | # | Criterion | State |
 |---|---|---|
-| A1 | server.py boots on ARM64 python, no ctranslate2 | 🔄 dispatcher routes to ONNX; backend not yet available |
-| A2 | known WAV → correct transcript | ⚠️ proven in the **emulated** lane (`jfk.wav` character-exact); not yet native |
-| A3 | Mandarin → Simplified Chinese output | ⚠️ proven in the **emulated** lane (output already Simplified); not yet native |
-| A4 | latency partial <1.0s / final <2.0s | ❌ **REFUTED for emulation** (3–10× over budget). Native lane is now the only route. |
+| A1 | server.py boots on ARM64 python, no ctranslate2 | ✅ **PASS** — `backend=QnnWhisperBackend arch=ARM64 ctranslate2_loaded=False` |
+| A2 | known WAV → correct transcript | ✅ **PASS** — character-exact, 0.11 s |
+| A3 | Mandarin → Simplified Chinese output | ✅ **PASS** — `甚至出现交易几乎停止的情况。` no Traditional chars |
+| A4 | latency partial <1.0s / final <2.0s | ✅ **PASS** — **88 ms / 93 ms** on the Hexagon NPU (11× and 21× inside budget) |
 | A5 | VAD gates speech vs silence | ✅ **PASS** (EnergyVAD; Silero not yet installed natively) |
 | A6 | live mic → overlay captions | ⬜ not started |
 | A7 | virtual camera registered | ✅ **PASS** — `OBS Virtual Camera` in DirectShow category, views 64/32 |

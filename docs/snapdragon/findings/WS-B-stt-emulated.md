@@ -100,7 +100,7 @@ The **only** side effect on the shared machine is the PEP 514 registry key `3.11
 not installed (`Include_launcher=0`) and the interpreter is not on `PATH`. Bare `python`
 still resolves to the native ARM64 build that WS-A/WS-C/WS-D rely on.
 
-### Two gotchas worth recording, both of which cost real time:
+### Two gotchas worth recording
 
 - `GetNativeSystemInfo()` **lies** inside an emulated x64 process — it returns
   `PROCESSOR_ARCHITECTURE_AMD64 (9)`. Do not use it to detect Prism.
@@ -171,8 +171,10 @@ There is **no Mandarin TTS voice on this machine** — SAPI exposes only *David*
 (en-US), and `HKLM\SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens` likewise lists only
 David/Mark/Zira. Hence the downloaded human-speech Mandarin fixture.
 
-### Transcripts obtained vs expected (model `base`, cpu/int8, via the repo's own
-`backends.faster_whisper_backend.FasterWhisperBackend`)
+### Transcripts obtained vs expected
+
+Model `base`, cpu/int8, driven through the repo's own
+`backends.faster_whisper_backend.FasterWhisperBackend` — not a hand-rolled call.
 
 | Fixture | Lang | Expected | Got | Verdict |
 |---|---|---|---|---|
@@ -535,5 +537,57 @@ C:\Users\snapd\Downloads\laolao\.venv-x64\Scripts\python.exe `
     C:\Users\snapd\Downloads\laolao\docs\snapdragon\findings\ws_b_verify.py
 ```
 
-Re-proves H-200…H-203 from scratch, re-downloading the audio fixtures if they are missing.
-Exit code 0 means nothing came out REFUTED.
+Re-proves H-200…H-203 from scratch, re-downloading the audio fixtures into
+`laolao-tools\audio\` if they are missing (network needed on first run only). It
+deliberately reads its fixtures from there rather than `tests/fixtures/`, which is a
+shared directory other agents also write to.
+
+It defaults to `tiny` + `base` for the latency section so it finishes in ~3 minutes;
+add `--full` to include `small` (~25 min, since every pass costs ~12 s).
+
+**Exit code 1 is the expected, correct outcome here** — the script exits non-zero when any
+hypothesis is REFUTED, and H-202 is.
+
+Actual output of the reproduction run (abridged):
+
+```
+=> H-200: CONFIRMED
+  jfk.wav  (JFK inaugural excerpt, 11.00s, lang=en)
+    transcript : 'And so my fellow Americans, ask not what your country can do for you,
+                  ask what you can do for your country.'
+    matched    : ['ask not what your country can do for you']  -> OK
+  asr_example_zh.wav  (FunASR canonical Mandarin sample, 5.55s, lang=zh)
+    transcript : '欢迎大家来体验,打模院推出的语音识别模型。'
+    matched    : ['欢迎大家', '语音识别']  -> OK
+=> H-201: CONFIRMED
+
+  tiny   partial(2.0s window)   median  1343 ms  budget 1000 ms -> FAIL
+  tiny   final(4.0s window)     median  1305 ms  budget 2000 ms -> PASS
+  base   partial(2.0s window)   median  3139 ms  budget 1000 ms -> FAIL
+  base   final(4.0s window)     median  2870 ms  budget 2000 ms -> FAIL
+=> H-202: REFUTED
+
+=> H-203: CONFIRMED for install/import; device open blocked (OBS holds the slot)
+
+$ pytest tests/ -m "not slow" -q   ->  2 failed, 41 passed, 12 skipped   exit 1
+$ pytest tests/ -m slow -q         ->  10 passed, 1 skipped               exit 0
+```
+
+Two numbers differ from the tables above and both are explained: the latency figures are
+slightly higher because other agents were active during this run (`tiny` 1 343 vs 1 171 ms),
+and the fast-test line reads *2 failed / 12 skipped* rather than *3 failed / 9 skipped*
+because OBS Studio was holding the camera slot, so the three `@vcam_available` tests
+skipped instead of running.
+
+### Artifacts
+
+| Path | What |
+|---|---|
+| `C:\Users\snapd\Downloads\laolao-tools\python311-x64\` | the x64 CPython 3.11.9 install (no admin, not on PATH) |
+| `C:\Users\snapd\Downloads\laolao\.venv-x64\` | this lane's venv |
+| `C:\Users\snapd\Downloads\laolao-tools\audio\` | `jfk.wav`, `asr_example_zh.wav`, `paraformer_zh_0.wav`, `english_speech.wav` |
+| `~\.cache\laolao\models\` | CT2 `tiny` / `base` / `small` weights, already downloaded |
+| `docs\snapdragon\findings\ws_b_verify.py` | the reproducer |
+
+No existing repo file was modified. The `venv` junction I used to prove the three headless
+tests has been removed.

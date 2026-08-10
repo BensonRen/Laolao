@@ -46,6 +46,28 @@ function applyRoot(root) {
 
 applyRoot(path.join(__dirname, '..'));   // dev default; packaged apps re-resolve in ensureRoot()
 
+// The virtual-camera sink may need a DIFFERENT interpreter than the caption
+// engine. On Windows ARM64 the OBS DirectShow filter ships as x64 only
+// (obs-virtualcam-module64.dll is machine 0x8664, and there is no ARM64
+// build), and a DirectShow filter is loaded *in-process* — so a native-ARM64
+// python can never drive that camera while an emulated-x64 one can. Because
+// virtual_cam.py already runs as its own process fed over TCP, that process
+// boundary doubles as an architecture boundary for free: the engine stays
+// native (fast Whisper) and only the thin frame sink is emulated.
+//
+// Resolved lazily — readSettings() needs app.getPath(), which is not available
+// at module load. Order: LAOLAO_PYTHON_CAMERA env → `pythonCamera` in
+// settings.json → the engine interpreter, so every other platform is unchanged.
+function cameraPy() {
+  const fromEnv = process.env.LAOLAO_PYTHON_CAMERA;
+  if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
+  try {
+    const fromSettings = readSettings().pythonCamera;
+    if (fromSettings && fs.existsSync(fromSettings)) return fromSettings;
+  } catch {}
+  return VENV_PY;
+}
+
 // ── Settings (<userData>/settings.json) ────────────────────────
 function settingsFile() { return path.join(app.getPath('userData'), 'settings.json'); }
 
@@ -169,19 +191,70 @@ function findObsMac() {
   return null;
 }
 
-function findObsWinBin() {
+// CLSID of OBS's DirectShow virtual-camera filter.
+const OBS_VCAM_CLSID = '{A3FCE0F5-3493-419F-958A-ABA1250EC20B}';
+
+function regQueryDefault(key, view = '') {
   try {
-    const out = execSync('reg query "HKLM\\SOFTWARE\\OBS Studio" /ve', {
-      encoding: 'utf8', timeout: 5000,
-    });
+    const out = execSync(`reg query "${key}" /ve ${view}`.trim(),
+                         { encoding: 'utf8', timeout: 5000 });
     const m = out.match(/REG_SZ\s+(.+)/);
-    if (m) {
-      const bin = path.join(m[1].trim(), 'bin', '64bit');
-      if (fs.existsSync(bin)) return bin;
+    return m ? m[1].trim() : null;
+  } catch { return null; }
+}
+
+// Walk a candidate ladder instead of trusting one registry key. A portable /
+// zip OBS registers its virtual camera without ever writing HKLM\SOFTWARE\OBS
+// Studio, so registry-only detection reports "OBS not found" on a machine
+// where the camera is installed and working.
+function findObsWinBin() {
+  const candidates = [];
+  const addRoot = (root) => {
+    if (!root) return;
+    // 64bit for a normal x64 install; an ARM64 distribution uses a different
+    // bin dir but still ships the x64 DirectShow filter.
+    for (const sub of [['bin', '64bit'], ['bin', 'ARM64'], ['bin']]) {
+      candidates.push(path.join(root, ...sub));
     }
-  } catch {}
-  const fallback = 'C:\\Program Files\\obs-studio\\bin\\64bit';
-  return fs.existsSync(fallback) ? fallback : null;
+  };
+
+  // Explicit overrides win — the only workable answer for portable installs.
+  if (process.env.LAOLAO_OBS_BIN) candidates.push(process.env.LAOLAO_OBS_BIN);
+  try { if (readSettings().obsBin) candidates.push(readSettings().obsBin); } catch {}
+
+  // Installer-based install.
+  addRoot(regQueryDefault('HKLM\\SOFTWARE\\OBS Studio'));
+
+  // The filter itself. This is the trace that actually matters: if the CLSID
+  // resolves to a DLL on disk, the virtual camera is installed no matter how
+  // OBS got there. Path shape:
+  //   <obsroot>\data\obs-plugins\win-dshow\obs-virtualcam-module64.dll
+  //
+  // Query every key path AND every view flag, because registry redirection on
+  // Windows ARM64 is genuinely counter-intuitive: `reg query ... /reg:64`
+  // resolves the ARM64-*native* view, which is empty here (there is no ARM64
+  // build of the filter), while the x64 registration lives in a view reg.exe
+  // only reaches via /reg:32 — and PowerShell's HKLM: provider shows yet
+  // another merge. Trusting any single view yields a confident false negative.
+  for (const keyBase of ['', '\\WOW6432Node']) {
+    const key = `HKLM\\SOFTWARE\\Classes${keyBase}\\CLSID\\${OBS_VCAM_CLSID}\\InprocServer32`;
+    for (const view of ['', '/reg:64', '/reg:32']) {
+      const dll = regQueryDefault(key, view);
+      if (dll && fs.existsSync(dll)) {
+        candidates.push(path.dirname(dll));
+        addRoot(path.resolve(path.dirname(dll), '..', '..', '..'));
+      }
+    }
+  }
+
+  // Conventional locations.
+  addRoot('C:\\Program Files\\obs-studio');
+  addRoot('C:\\Program Files (x86)\\obs-studio');
+
+  for (const c of candidates) {
+    if (c && fs.existsSync(c)) return c;
+  }
+  return null;
 }
 
 async function checkObs() {
@@ -213,16 +286,15 @@ async function checkObs() {
 // ── Python child processes (supervised) ────────────────────────
 let isQuitting = false;
 
-function spawnPython(script, args = []) {
+function spawnPython(script, args = [], { exe = null } = {}) {
   // On Windows, add the OBS bin dir to PATH so obs-virtualcam-module64.dll
   // can find its dependencies (obs.dll etc.) when pyvirtualcam loads it.
   const env = { ...process.env };
-  if (IS_WIN) {
-    const obsBin = obsWinBin || 'C:\\Program Files\\obs-studio\\bin\\64bit';
-    env.PATH = `${obsBin};${env.PATH || ''}`;
+  if (IS_WIN && obsWinBin) {
+    env.PATH = `${obsWinBin};${env.PATH || ''}`;
   }
 
-  const proc = spawn(VENV_PY, [script, ...args], {
+  const proc = spawn(exe || VENV_PY, [script, ...args], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     env,
@@ -565,7 +637,10 @@ app.whenReady().then(async () => {
   applyRoot(resolvedRoot);
   console.log(`[startup] engine root: ${ROOT}`);
 
-  const obsAvailable = await checkObs();
+  // NOTE: checkObs() deliberately runs *after* the windows exist (below).
+  // It awaits a modal dialog when OBS is missing, and awaiting it here meant a
+  // first launch on a machine without OBS produced zero windows — just an
+  // orphan dialog — which reads as "the app didn't start".
 
   // The renderer streams mic audio over WebSocket on every platform, so
   // Python never opens the mic itself (unified path; Chromium provides AEC).
@@ -575,18 +650,6 @@ app.whenReady().then(async () => {
       'The Python caption server keeps crashing. Check that setup completed ' +
       `(run setup.sh in ${ROOT}) and that ${path.join(ROOT, 'venv')} is intact.`,
   });
-
-  if (obsAvailable) {
-    vcamSup = supervise('virtual_cam', () =>
-      spawnPython(VCAM_PY, [String(CAM_W), String(CAM_H), String(CAM_FPS)]), {
-      friendlyName: 'Virtual camera',
-      failHint:
-        'The virtual camera helper keeps crashing. Is OBS Studio 28 or newer ' +
-        'installed? Its Camera Extension provides the driver Laolao uses.',
-    });
-  } else {
-    console.log('[vcam] OBS not found — running captions-only (no virtual camera)');
-  }
 
   // Control window: toolbar + mirrored self-view. Never captured.
   // Electron centers new windows on whichever display has the mouse; on a
@@ -644,6 +707,26 @@ app.whenReady().then(async () => {
   });
   outputWindow.setIgnoreMouseEvents(true);
 
+  // Chromium CLAMPS a new window to the display work area at construction, so
+  // on a desktop whose DIP work area is smaller than the camera frame (e.g.
+  // 1024x768 on this Snapdragon at its default scaling) the output window is
+  // born 1008x720 instead of 1280x720 — despite useContentSize and the width
+  // requested above. capturePage() then returns 1008x720, and the aspect-safe
+  // center-crop below trims the top and bottom ~21% to restore 16:9. The
+  // caption bar lives at the bottom, so the captions are silently cropped off
+  // the frame the far end receives — with black=false and a correct 1280x720
+  // arriving at the sink, so every diagnostic still looks healthy.
+  //
+  // setContentSize() after construction is not subject to that clamp.
+  // Verified against 8 window variants: offscreen, frame:false and minWidth
+  // all still clamp; this is the one that holds.
+  outputWindow.setContentSize(CAM_W, CAM_H);
+  const got = outputWindow.getContentSize();
+  if (got[0] !== CAM_W || got[1] !== CAM_H) {
+    diag(`output window is ${got[0]}x${got[1]}, wanted ${CAM_W}x${CAM_H} — `
+       + 'captions may be cropped from the virtual camera frame');
+  }
+
   outputWindow.loadFile(OVERLAY, { query: { output: '1' } });
   outputWindow.webContents.setBackgroundThrottling(false);
   outputWindow.on('closed', () => { outputWindow = null; });
@@ -651,13 +734,36 @@ app.whenReady().then(async () => {
   // joins in whenever its socket connects.
   outputWindow.webContents.once('did-finish-load', () => captureLoop());
 
-  // Readiness (informational for the server; gating for the vcam socket).
-  waitForPort(WS_PORT, { timeoutMs: 120_000, label: 'caption server' });
+  // Readiness (informational only — neither call gates the pipeline).
+  // 300s, not 120s: the first ever load of a Qualcomm QNN context compiles it
+  // for the device and took 117s measured on Snapdragon X2 with
+  // large-v3-turbo (7s once cached). A 120s budget left three seconds of
+  // headroom on the one run where a first-time user is already waiting.
+  waitForPort(WS_PORT, { timeoutMs: 300_000, label: 'caption server' });
+
+  // Always connect the frame sink, whether or not WE spawned virtual_cam.py.
+  // This used to be gated on obsAvailable, which meant a perfectly healthy
+  // sink already listening on :8766 was ignored outright. That matters now
+  // that the sink is deliberately an out-of-process, differently-architected
+  // helper (see cameraPy()) which may be started by something other than us.
+  // The connect loop retries quietly forever, so a slow or restarting sink is
+  // picked up whenever it binds.
+  waitForPort(VCAM_PORT, { timeoutMs: 60_000, label: 'virtual camera' })
+    .finally(() => connectVcSocket());
+
+  // Now that there is a window to own it, find OBS and start our own sink.
+  const obsAvailable = await checkObs();
   if (obsAvailable) {
-    // Even on timeout, start the connect loop — it retries quietly forever,
-    // so a slow or restarting virtual_cam.py is picked up whenever it binds.
-    waitForPort(VCAM_PORT, { timeoutMs: 60_000, label: 'virtual camera' })
-      .then(() => connectVcSocket());
+    vcamSup = supervise('virtual_cam', () =>
+      spawnPython(VCAM_PY, [String(CAM_W), String(CAM_H), String(CAM_FPS)],
+                  { exe: cameraPy() }), {
+      friendlyName: 'Virtual camera',
+      failHint:
+        'The virtual camera helper keeps crashing. Is OBS Studio 28 or newer ' +
+        'installed? Its Camera Extension provides the driver Laolao uses.',
+    });
+  } else {
+    console.log('[vcam] OBS not found — captions-only unless a sink is already on :8766');
   }
 });
 
