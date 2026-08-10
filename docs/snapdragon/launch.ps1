@@ -297,7 +297,7 @@ if ($owner) {
 cd /d "$RepoRoot"
 set PYTHONIOENCODING=utf-8
 $modelEnv
-"$VenvPy" server.py > "$LogOut" 2> "$LogErr"
+"$VenvPy" server.py --no-mic > "$LogOut" 2> "$LogErr"
 "@ | Set-Content $EngineCmd -Encoding ASCII
 
     $proc = Start-Process -FilePath $EngineCmd -WorkingDirectory $RepoRoot `
@@ -359,7 +359,7 @@ if ($NoCamera) {
 
 # -------------------------------------------------- 4. the caption window ---
 Write-Step '[4/4] Opening the caption window'
-$overlayUrl = 'file:///' + ($OverlayHtml -replace '\\', '/') + "?output=1&controls=1&port=$Port"
+$overlayUrl = 'file:///' + ($OverlayHtml -replace '\\', '/') + "?output=1&controls=1&mic=1&port=$Port"
 if ($NoBrowser) {
     Write-Ok "skipped (-NoBrowser). It lives at: $overlayUrl"
 } else {
@@ -387,7 +387,17 @@ if ($NoBrowser) {
                 # created; Chromium remembers the size the user leaves it at.
                 "--app=$overlayUrl", '--window-size=920,340',
                 "--user-data-dir=$profileDir",
-                '--no-first-run', '--no-default-browser-check') | Out-Null
+                '--no-first-run', '--no-default-browser-check',
+                # This window captures the mic (mic=1) so Chromium can apply
+                # echo cancellation. Without this flag Edge shows a "This file
+                # wants to use your microphones" prompt every launch, and until
+                # someone clicks Allow there are no captions at all, because the
+                # engine is running --no-mic. The blast radius is contained:
+                # this profile is created by us, is used by nothing else, and
+                # only ever loads overlay/index.html from disk. It auto-accepts
+                # a REAL device -- it does not substitute a synthetic one, which
+                # would be --use-fake-device-for-media-stream.
+                '--use-fake-ui-for-media-stream') | Out-Null
             $opened = $true
         } catch { }
     }
