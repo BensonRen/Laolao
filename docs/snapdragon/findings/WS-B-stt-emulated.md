@@ -19,9 +19,19 @@ Date: 2026-08-09/10 · Venv: `C:\Users\snapd\Downloads\laolao\.venv-x64` (x64, m
 | H-203 | pyvirtualcam x64 wheel installs, imports, and opens the camera | **CONFIRMED** (exceeded — it opened a real device) |
 
 **Bottom line: the emulated lane WORKS but is NOT fast enough to ship as the primary
-captioning path.** Correctness is perfect; latency misses the A4 budget by ~3–10×.
-It is a valid *degraded* fallback (see "Honest verdict") and it is currently the **only**
-proven path to the virtual camera.
+captioning path.** Correctness is perfect — transcripts are character-exact in English and
+near-exact in Mandarin, and 53 of 56 applicable repo tests pass. Latency is the problem:
+
+| model | partial (need <1 000 ms) | final (need <2 000 ms) |
+|---|---:|---:|
+| `small` (shipped `config.json` default) | **12 578 ms** | **14 124 ms** |
+| `base` (CLAUDE.md default) | **2 553–3 053 ms** | **3 007–3 039 ms** |
+| `tiny` | **1 171 ms** | **1 261 ms** ✅ |
+
+`tiny` is the only configuration that comes close, and it meets the *final* budget. The
+lane is therefore a valid **degraded** fallback (see "Honest verdict"), and — because OBS's
+ARM64 build ships an **x64-only** camera filter — it is currently the only proven path to
+the virtual camera at all.
 
 ---
 
@@ -76,7 +86,21 @@ $ ...\Python311-arm64\python.exe -c "import platform,os; ..."
 machine= ARM64 PROCESSOR_ARCHITECTURE= ARM64
 ```
 
-Two gotchas worth recording, both of which cost real time:
+### Isolation check (no other agent is affected)
+
+```
+PATH entries containing python311-x64 : 0
+Get-Command python -> C:\Users\snapd\AppData\Local\Programs\Python\Python311-arm64\python.exe
+default `python` machine = ARM64
+HKCU PEP514 PythonCore keys: 3.11 (new, x64)   3.11-arm64 (pre-existing)
+```
+
+The **only** side effect on the shared machine is the PEP 514 registry key `3.11` under
+`HKCU\SOFTWARE\Python\PythonCore`. It affects nothing here because the `py` launcher was
+not installed (`Include_launcher=0`) and the interpreter is not on `PATH`. Bare `python`
+still resolves to the native ARM64 build that WS-A/WS-C/WS-D rely on.
+
+### Two gotchas worth recording, both of which cost real time:
 
 - `GetNativeSystemInfo()` **lies** inside an emulated x64 process — it returns
   `PROCESSOR_ARCHITECTURE_AMD64 (9)`. Do not use it to detect Prism.
@@ -226,7 +250,54 @@ that fixed encoder cost dominates everything else, which means:
 - shortening `rolling_window_s` or `partial_interval_s` **cannot** buy latency back;
 - RTF is a misleading metric here — the honest number is *milliseconds per pass*.
 
-<!--THREADS_SECTION-->
+### Clean re-measurement: does thread count or a smaller model rescue it?
+
+Two obvious escape hatches had to be ruled out before declaring H-202 refuted.
+
+**Escape hatch 1 — we're only using 4 of 18 cores.** Real: `faster_whisper.WhisperModel`
+defaults to `cpu_threads=0`, which it passes to CTranslate2 as `intra_threads=0`, and
+CTranslate2's own default is **4 threads** (its docstring says so: *"Number of threads to
+use when running on CPU (4 by default)"*). On an 18-core machine the repo leaves 14 cores
+idle. Worth testing.
+
+**Escape hatch 2 — use `tiny`.**
+
+Both measured together, `asr_example_zh.wav`, median of 5 timed passes after warm-up,
+on a quieter machine:
+
+| model | cpu_threads | partial (2.0 s) | final (4.0 s) |
+|---|---:|---:|---:|
+| `tiny` | 4 (default) | 1 170 ms | 1 321 ms |
+| `tiny` | 8 | 1 202 ms | 1 381 ms |
+| `tiny` | 12 | 1 173 ms | 1 350 ms |
+| `tiny` | 18 | **1 171 ms** | **1 261 ms** |
+| `base` | 4 (default) | 3 053 ms | 3 007 ms |
+| `base` | 8 | 3 172 ms | 3 689 ms |
+| `base` | 12 | 2 634 ms | 2 809 ms |
+| `base` | 18 | **2 553 ms** | **3 039 ms** |
+
+**Escape hatch 1 is closed.** Going from 4 → 18 threads buys `tiny` nothing at all
+(1 170 → 1 171 ms) and `base` about 16 % at best (3 053 → 2 553 ms), well inside run-to-run
+noise for the `final` column. The workload does not scale with cores here, which tells us
+the bottleneck is **per-core throughput of Prism-translated SIMD**, not parallelism —
+exactly what you would expect when every AVX2 int8 GEMM instruction has to be translated.
+Nothing in a config file is going to fix that.
+
+This re-measurement also validates the contaminated numbers above: clean `base`@4 is
+3 053 / 3 007 ms versus 3 652 / 3 165 ms under load — the other agents cost ~5–20 %, not
+the 3–10× that would be needed to change any verdict.
+
+**Escape hatch 2 is a partial win and the one genuinely interesting result:**
+
+| `tiny` @ emulated | measured | A4 budget | |
+|---|---:|---:|---|
+| partial | 1 171 ms | 1 000 ms | ❌ misses by 17 % |
+| final | 1 261 ms | 2 000 ms | ✅ **passes** |
+
+`tiny` is the only configuration that comes anywhere near shippable — it *meets* the final
+budget and misses the partial budget narrowly. But `tiny` is also the weakest model for
+Mandarin, which is this product's primary language, so buying latency this way costs
+exactly the accuracy the product exists to provide. It is a real option, not a good one.
 
 ---
 
@@ -244,6 +315,22 @@ native ext modules: ['_native_windows_obs.cp311-win_amd64.pyd',
                      '_native_windows_unity_capture.cp311-win_amd64.pyd']
 OPENED device: OBS Virtual Camera        <-- opened AND accepted a 1280x720 RGB frame
 ```
+
+**Later in the session the same call started failing** — worth recording so nobody thinks
+it regressed:
+
+```
+OPEN FAILED: RuntimeError 'obs' backend: virtual camera output could not be started
+              'unitycapture' backend: No camera registered. Did you install any camera?
+filter still registered -> ...\obs-arm64\...\obs-virtualcam-module64.dll
+```
+
+The filter is still registered; the *slot* is busy. `Get-Process` shows WS-C had by then
+launched `obs64.exe` from `laolao-tools\obs-arm64\bin\64bit\`. This is the documented
+single-producer constraint (README: *"Only one app can use 'OBS Virtual Camera' at a
+time"*), not an emulation problem — and it is a live coordination hazard for WS-E's
+end-to-end run: **OBS Studio's own virtual camera and `virtual_cam.py` cannot both be
+active.**
 
 ### Cross-workstream finding — the OBS ARM64 build ships an **x64** camera filter
 
@@ -283,13 +370,161 @@ even though it is the slower lane for STT.
 
 ## Repo test suite in the x64 venv
 
-<!--PYTEST_SECTION-->
+### Fast tests
+
+```
+$ .venv-x64\Scripts\python.exe -m pytest tests/ -m "not slow" -q
+3 failed, 43 passed, 9 skipped, 11 deselected, 2 warnings in 37.13s
+
+FAILED tests/test_windows_headless.py::test_server_starts_and_binds  - FileNotFoundError
+FAILED tests/test_windows_headless.py::test_server_accepts_websocket - FileNotFoundError
+FAILED tests/test_windows_headless.py::test_virtual_cam_tcp_port     - FileNotFoundError
+```
+
+**All three failures are one bug, and it is not an emulation bug.**
+`tests/test_windows_headless.py` hardcodes the interpreter path:
+
+```python
+venv_py = ROOT / ("venv/Scripts/python.exe" if IS_WIN else "venv/bin/python")
+```
+
+My venv is `.venv-x64`, per the isolation rules in `STATUS.md`, so `CreateProcess` raises
+`[WinError 2] The system cannot find the file specified`. Proof — point `venv` at it and
+re-run the same three tests unchanged:
+
+```
+$ New-Item -ItemType Junction -Path .\venv -Target .\.venv-x64     # no admin needed
+$ .venv-x64\Scripts\python.exe -m pytest tests/test_windows_headless.py -q `
+      -k "server_starts or accepts_websocket or virtual_cam_tcp"
+2 passed, 1 skipped, 16 deselected in 32.56s
+```
+
+So under emulation **`server.py` really does boot, bind :8765, complete a WebSocket
+handshake and emit its first JSON message** — that is acceptance criterion **A1** satisfied
+on this lane (with faster-whisper rather than "no ctranslate2"). The 1 skip is
+`test_virtual_cam_tcp_port`, whose `@vcam_available` guard evaluated False at import time
+because OBS Studio had grabbed the camera slot (above).
+
+I removed the `venv` junction afterwards so it cannot confuse WS-A/WS-D/WS-E. Recreate it
+with the one-liner above if you want a green headless run. A cleaner long-term fix is for
+the test to honour a `LAOLAO_PYTHON` env var or fall back to `sys.executable` — but I was
+told not to modify repo files, so I did not.
+
+The 9 skips in the fast run are the macOS-only tests plus `silero_vad`/optional guards.
+
+### Slow (inference) tests
+
+```
+$ .venv-x64\Scripts\python.exe -m pytest tests/ -m slow -q
+10 passed, 1 skipped, 55 deselected, 2 warnings in 40.20s
+```
+
+**Every inference test passes under emulation.** The single skip is
+`test_backend_chinese_tts_contains_chinese`, which is `@pytest.mark.macos_only`.
+
+The repo's own latency harness, with its printed numbers (`tiny` model, per the
+`backend_cfg` fixture):
+
+```
+$ .venv-x64\Scripts\python.exe -m pytest tests/test_latency.py -m slow -q -s
+[latency] baseline: 3 s silence → 1.515s (RTF 0.51x)
+[latency] chunk 1/6: buffer=0.5s, transcription=1.210s, total_wall=1.210s, result=''
+[latency] chunk 2/6: buffer=1.0s, transcription=1.214s, total_wall=2.424s, result=''
+[latency] chunk 3/6: buffer=1.5s, transcription=1.165s, total_wall=3.589s, result=''
+[latency] chunk 4/6: buffer=2.0s, transcription=1.179s, total_wall=4.769s, result=''
+[latency] chunk 5/6: buffer=2.5s, transcription=1.187s, total_wall=5.956s, result=''
+[latency] chunk 6/6: buffer=3.0s, transcription=1.152s, total_wall=7.108s, result=''
+[latency] 1s audio → 1.275s (RTF 1.27x)
+[latency] 2s audio → 1.182s (RTF 0.59x)
+[latency] 3s audio → 1.160s (RTF 0.39x)
+3 passed in 18.14s
+```
+
+Note what these green ticks actually mean: the repo's latency tests assert a **10-second**
+upper bound ("conservative so it passes on slow CI"), not the 1 s / 2 s product target.
+They independently reproduce my `tiny` figure (~1.15–1.28 s per pass) and they pass — while
+the product requirement does not. **A green `pytest` run is not evidence that A4 is met.**
+
+### Test-suite summary
+
+| Run | Result |
+|---|---|
+| `-m "not slow"` | 43 passed, 3 failed, 9 skipped — all 3 failures are the `venv/` path assumption |
+| `-m "not slow"` with `venv` junction | those 3 → **2 passed, 1 skipped** (skip = camera slot busy) |
+| `-m slow` | **10 passed**, 1 skipped (macOS-only) |
+| `tests/test_latency.py -m slow -s` | **3 passed** (against a 10 s bound, not the 1 s/2 s target) |
 
 ---
 
 ## Honest verdict — is emulation fast enough to ship to a real user?
 
-<!--VERDICT-->
+**No — not as the primary captioning path. Yes — as a fallback, and only with `tiny`.**
+
+The mission was to prove the repo runs unchanged under emulation. It does, completely:
+stock `requirements.txt`, no pins touched, no compiler, no source builds, correct
+transcripts in both languages, 53 of 56 applicable tests green and the 3 red ones red for
+a path-string reason that has nothing to do with ARM64. As an *engineering* result the
+lane is a success.
+
+As a *product* result it fails, and the failure is not marginal:
+
+| Config | partial (need <1 000 ms) | final (need <2 000 ms) | Shippable? |
+|---|---:|---:|---|
+| `small` (the repo's shipped `config.json` default) | 12 578 ms | 14 124 ms | No — 12× over |
+| `base` (CLAUDE.md default) | 2 553–3 053 ms | 3 007–3 039 ms | No — 3× over |
+| `tiny` | 1 171 ms | 1 261 ms | Borderline |
+
+Three things make this worse than the raw numbers suggest:
+
+1. **The shipped default is the worst case.** `config.json` says `"model": "small"` and
+   `"device": "mlx"`. On this machine `mlx` is unavailable, so `get_backend()` falls
+   through to CPU faster-whisper with `small` — the 12–14 s column. A grandma who
+   double-clicks the app today gets captions **~13 seconds behind the conversation**.
+   That is not "slow captioning", it is a broken experience.
+2. **You cannot tune your way out.** Whisper always encodes a padded 30-second mel window,
+   so shrinking `rolling_window_s`/`partial_interval_s` changes nothing (my 1 s and 5 s
+   windows cost the same). And 4→18 threads buys ~0–16 %. The cost is per-core translated
+   SIMD throughput.
+3. **`partial_interval_s` is 0.35 s.** At 3 s/pass the transcription worker is
+   oversubscribed ~9×. It won't fall over — `_enqueue_transcribe()` coalesces pending
+   partials and only finals are guaranteed — but the user sees a partial roughly every
+   3 s instead of every 0.35 s. The live-typing effect the product is built around
+   disappears.
+
+**What I would actually ship on this machine today**, if forced to ship now:
+`tiny`, with `device: "cpu"` pinned so nothing tries MLX. Final captions land ~1.3 s after
+you stop speaking, which meets A4's final budget, and partials arrive ~1.2 s apart — laggy
+but genuinely usable. The cost is `tiny`-grade Mandarin accuracy, which is the product's
+main language. Call it a *degraded mode*, document it as such, and do not let it become
+the default.
+
+**Where the emulated lane is unambiguously the winner: the virtual camera.** OBS's
+Windows-ARM64 distribution ships its DirectShow filter as an **x64** DLL only. Only an
+emulated-x64 (or x86) process can load it, and I demonstrated an emulated x64 Python
+opening "OBS Virtual Camera" and pushing a 1280×720 frame. A native-ARM64 producer has no
+in-process route to that camera at all. So even if WS-A's native lane wins on STT speed,
+**the sink side may still have to run emulated**, or go through OBS Studio's own
+out-of-process virtual camera instead of `virtual_cam.py`.
+
+### Recommendation to the orchestrator
+
+- Treat this lane as **the guaranteed floor**, exactly as intended — it is proven and
+  it will produce captions. Keep it.
+- **Do not ship it with the current defaults.** If the emulated lane becomes the shipping
+  lane, `model` must move to `tiny` and `device` to `cpu`.
+- **Prioritise WS-A (native ONNX/QNN).** The A4 gap here is 3–12×; nothing on the emulated
+  side closes that. Only native ARM64 CPU, or the Hexagon NPU, plausibly can.
+- **Feed the x64-filter finding into WS-C/WS-E now** (H-302/H-303) — it constrains the
+  architecture of whatever lane wins.
+
+### Loose ends I did not chase
+
+- `small`'s `final 5.0 s` cell (process died at 2.6 GB free RAM). Conclusion unaffected.
+- Whether `float32` instead of `int8` is faster under Prism — int8 leans hardest on the
+  emulated SIMD paths, so `float32` is not an obvious loss. Untested; low expected value
+  given the size of the gap.
+- Live mic → WebSocket → overlay (A6) — belongs to WS-E, and `server.py`'s WebSocket path
+  is already proven working here.
 
 ---
 

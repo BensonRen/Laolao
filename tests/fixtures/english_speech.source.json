@@ -1,0 +1,8 @@
+{
+  "wav": "english_speech.wav",
+  "transcript": "Hello grandma, I miss you very much.",
+  "origin": "tts",
+  "platform": "Windows",
+  "language": "en",
+  "license": "synthesised locally; no third-party audio"
+}

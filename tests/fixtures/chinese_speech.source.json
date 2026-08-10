@@ -1,0 +1,21 @@
+{
+  "wav": "chinese_speech.wav",
+  "transcript": "甚至出现交易几乎停滞的情况",
+  "origin": "download",
+  "language": "zh",
+  "source_id": "aishell1-BAC009S0764W0121",
+  "description": "AISHELL-1 test-set utterance BAC009S0764W0121, redistributed as a test_wavs/ sample in the icefall AISHELL Zipformer model repo.",
+  "source_url": "https://huggingface.co/zrjin/icefall-asr-aishell-zipformer-2023-10-24/resolve/main/test_wavs/BAC009S0764W0121.wav",
+  "mirrors": [
+    "https://huggingface.co/zrjin/icefall-asr-aishell-zipformer-2023-10-24/resolve/main/test_wavs/BAC009S0764W0121.wav",
+    "https://huggingface.co/csukuangfj/icefall-aishell-pruned-transducer-stateless3-2022-06-20/resolve/main/test_wavs/BAC009S0764W0121.wav",
+    "https://huggingface.co/marcoyang/icefall-asr-aishell-zipformer-pruned-transducer-stateless7-2023-03-21/resolve/main/test_wavs/BAC009S0764W0121.wav"
+  ],
+  "sha256": "46dbc998c9d1d48111267c40741dd3200f2e5bcf4075f8c4c97f4451160dce50",
+  "transcript_url": "https://huggingface.co/zrjin/icefall-asr-aishell-zipformer-2023-10-24/resolve/main/test_wavs/transcript.txt",
+  "transcript_key": "BAC009S0764W0121",
+  "license": "Apache License 2.0 (AISHELL-1 / OpenSLR SLR33)",
+  "license_url": "https://www.openslr.org/33/",
+  "attribution": "AISHELL-1 Mandarin speech corpus, Beijing Shell Shell Technology Co., Ltd. Released under the Apache License v2.0 via OpenSLR SLR33.",
+  "processing": "peak-normalised to -3 dBFS; already 16 kHz mono 16-bit"
+}
