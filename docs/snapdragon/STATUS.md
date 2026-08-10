@@ -46,7 +46,8 @@ Legend: ⬜ not started · 🔄 in progress · ✅ proven with evidence · ❌ b
 | WS-B | STT via x64 Prism emulation (fallback) | agent | 🔄 launched | H-200..H-203. Near-certain; guarantees a shippable build. |
 | WS-C | OBS ARM64 + virtual camera | agent | 🔄 launched | H-300..H-305. OBS ARM64 zip exists. |
 | WS-D | Node.js + Electron ARM64 shell | agent | 🔄 launched | H-400..H-403. |
-| WS-E | End-to-end verification | agent | ⬜ | Runs only once A-criteria have candidates. |
+| WS-F | Ground-truth audio fixtures | agent | 🔄 launched | Unblocks A2/A3. `tests/generate_test_audio.py` only synthesizes speech on **macOS** — on Windows it emits silence + a sine tone, so no STT result here was verifiable. Windows SAPI has en-US voices only; **no Chinese voice/language pack**, and installing one is interactive so Mandarin ground truth must be sourced externally. |
+| WS-E | End-to-end verification | agent | ⬜ | Runs only once A-criteria have candidates. Grades against `acceptance/check.py`. |
 
 Wave 1 launched 2026-08-09. Each agent writes only to its own
 `findings/WS-<id>-*.md`; the orchestrator merges results into this file and
