@@ -22,15 +22,38 @@ import pytest
 
 ROOT = Path(__file__).parent.parent
 IS_WIN = platform.system() == "Windows"
+IS_ARM64 = platform.machine().lower() in ("arm64", "aarch64")
+
+# faster-whisper (via ctranslate2) and pyvirtualcam publish no win-arm64
+# distribution, so on Windows ARM64 these are not failures to fix — they are
+# packages that cannot exist. That platform uses the ONNX/QNN backend and an
+# out-of-process camera sink instead. See docs/snapdragon/NORTH_STAR.md.
+needs_x86_wheels = pytest.mark.skipif(
+    IS_WIN and IS_ARM64,
+    reason="no win-arm64 distribution: ctranslate2/faster-whisper and pyvirtualcam "
+           "cannot install on Windows ARM64 (this platform uses the ONNX/QNN backend)",
+)
+
+
+def _venv_python() -> Path:
+    """First existing venv interpreter — `venv`, then the ARM64 port's own."""
+    rel = ("Scripts", "python.exe") if IS_WIN else ("bin", "python")
+    for name in ("venv", ".venv-arm64", ".venv"):
+        cand = ROOT.joinpath(name, *rel)
+        if cand.exists():
+            return cand
+    return ROOT.joinpath("venv", *rel)
 
 # ── 1. Dependency imports ──────────────────────────────────────────────────────
 
 def test_sounddevice_import():
     import sounddevice  # noqa: F401
 
+@needs_x86_wheels
 def test_faster_whisper_import():
     import faster_whisper  # noqa: F401
 
+@needs_x86_wheels
 def test_pyvirtualcam_import():
     import pyvirtualcam  # noqa: F401
 
@@ -100,12 +123,14 @@ def test_pyvirtualcam_send_frame():
 
 # ── 4. Faster-whisper backend ─────────────────────────────────────────────────
 
+@needs_x86_wheels
 @pytest.mark.slow
 def test_whisper_model_loads():
     from faster_whisper import WhisperModel
     model = WhisperModel("tiny", device="cpu", compute_type="int8")
     assert model is not None
 
+@needs_x86_wheels
 @pytest.mark.slow
 def test_whisper_transcribes_silence():
     import numpy as np
@@ -127,7 +152,7 @@ def _free_port():
 def test_server_starts_and_binds():
     """Launch server.py on a random port, confirm it listens within 10 s."""
     port = _free_port()
-    venv_py = ROOT / ("venv/Scripts/python.exe" if IS_WIN else "venv/bin/python")
+    venv_py = _venv_python()
     proc = subprocess.Popen(
         [str(venv_py), str(ROOT / "server.py"), f"--port={port}", "--model=tiny"],
         cwd=ROOT,
@@ -155,7 +180,7 @@ def test_server_accepts_websocket():
     import websockets as ws
 
     port = _free_port()
-    venv_py = ROOT / ("venv/Scripts/python.exe" if IS_WIN else "venv/bin/python")
+    venv_py = _venv_python()
     proc = subprocess.Popen(
         [str(venv_py), str(ROOT / "server.py"), f"--port={port}", "--model=tiny"],
         cwd=ROOT,
@@ -191,7 +216,7 @@ def test_virtual_cam_tcp_port():
     from PIL import Image
     import io
 
-    venv_py = ROOT / ("venv/Scripts/python.exe" if IS_WIN else "venv/bin/python")
+    venv_py = _venv_python()
     proc = subprocess.Popen(
         [str(venv_py), str(ROOT / "virtual_cam.py")],
         cwd=ROOT,

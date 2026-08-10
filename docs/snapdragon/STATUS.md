@@ -28,8 +28,8 @@ the user asks.
 | A1 | server.py boots on ARM64 python, no ctranslate2 | ✅ **PASS** — `backend=QnnWhisperBackend arch=ARM64 ctranslate2_loaded=False` |
 | A2 | known WAV → correct transcript | ✅ **PASS** — character-exact, 0.11 s |
 | A3 | Mandarin → Simplified Chinese output | ✅ **PASS** — `甚至出现交易几乎停止的情况。` no Traditional chars |
-| A4 | latency partial <1.0s / final <2.0s | ✅ **PASS** — **88 ms / 93 ms** on the Hexagon NPU (11× and 21× inside budget) |
-| A5 | VAD gates speech vs silence | ✅ **PASS** (EnergyVAD; Silero not yet installed natively) |
+| A4 | latency partial <1.0s / final <2.0s | ✅ **PASS** — honest end-to-end **+0.84 s** to first partial, **+0.88 s** to final, **+0.65 s** to caption ink in the virtual-camera pixels. (88 ms was compute-only and is *not* the user-facing number.) |
+| A5 | VAD gates speech vs silence | ⚠️ **PARTIAL** — the check feeds digital zeros, which an energy VAD cannot fail. EnergyVAD fires on **any** steady noise above −42 dBFS; a real run produced `'Thank you very much.'`, Whisper's canonical non-speech hallucination. Silero is impossible here (needs torch). |
 | A6 | live mic → overlay captions | ✅ **PASS** — PCM → WS → VAD → NPU → 3 caption msgs incl. a final |
 | A7 | virtual camera registered | ✅ **PASS** — `OBS Virtual Camera` in DirectShow category, views 64/32 |
 | A8 | camera loadable by the call apps that need it | ✅ **PASS** — filter DLL is `AMD64(x64)`, so x64-emulated WeChat/Zoom can load it |

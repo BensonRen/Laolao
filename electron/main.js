@@ -24,10 +24,34 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding');
 // ensureRoot() walks the user through picking/fixing one at startup.
 let ROOT, VENV_PY, SERVER_PY, VCAM_PY, OVERLAY;
 
+// Candidate venv directory names, in preference order. `venv` is what setup.sh
+// / setup.bat create; the ARM64 port uses `.venv-arm64` because it cannot share
+// an environment with the x86-64 one. Hardcoding a single name meant Electron
+// looked for an interpreter that did not exist and the caption engine died five
+// times in a row before the supervisor gave up — with the engine itself
+// perfectly healthy when started by hand.
+const VENV_DIRS = ['venv', '.venv-arm64', '.venv'];
+
+function venvRelPy() {
+  return IS_WIN ? ['Scripts', 'python.exe'] : ['bin', 'python'];
+}
+
 function venvPyFor(root) {
-  return IS_WIN
-    ? path.join(root, 'venv', 'Scripts', 'python.exe')
-    : path.join(root, 'venv', 'bin', 'python');
+  // Explicit override first, for anyone with a non-standard layout.
+  const fromEnv = process.env.LAOLAO_PYTHON;
+  if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
+  try {
+    const fromSettings = readSettings().pythonEngine;
+    if (fromSettings && fs.existsSync(fromSettings)) return fromSettings;
+  } catch {}
+
+  for (const d of VENV_DIRS) {
+    const p = path.join(root, d, ...venvRelPy());
+    if (fs.existsSync(p)) return p;
+  }
+  // Nothing found: return the conventional path so the failure message names
+  // the thing the user is most likely expected to create.
+  return path.join(root, VENV_DIRS[0], ...venvRelPy());
 }
 
 function rootValid(root) {

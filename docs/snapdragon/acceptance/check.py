@@ -106,6 +106,53 @@ def norm(s: str) -> str:
     return re.sub(r"[\s\W_]+", "", s.lower())
 
 
+def _levenshtein(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def cer(ref: str, hyp: str) -> float:
+    """Character error rate on normalised text.
+
+    Substring containment is NOT an accuracy test: `norm(got) in norm(expect)`
+    means a transcript of the single word "Hello" scores a pass against
+    "Hello grandma, I miss you very much." A2/A3 used exactly that rule, so a
+    backend that emitted one correct word out of eight was graded PASS. An edit
+    distance cannot be fooled that way.
+    """
+    r, h = norm(ref), norm(hyp)
+    if not r:
+        return 0.0 if not h else 1.0
+    return _levenshtein(r, h) / len(r)
+
+
+def traditional_chars(text: str) -> list[str]:
+    """Characters OpenCC's t2s would rewrite — i.e. genuinely Traditional.
+
+    The previous implementation intersected the transcript with a hand-written
+    21-character list ("繁體東車馬語說們個過還發沒學國會來時對開關"). Measured
+    against this repo's own Mandarin fixture, a *fully Traditional* transcript
+    of it — 甚至出現交易幾乎停滯的情況, produced by the `small` model on the CPU
+    EP with qnn_strict:false — contains four Traditional characters
+    (現 幾 滯 況), none of which are on that list. So A3 reported PASS on
+    Traditional output: a false pass on the one thing A3 exists to check.
+    OpenCC already ships in this venv; ask it instead of guessing.
+    """
+    try:
+        from opencc import OpenCC
+    except Exception:
+        # No OpenCC: fall back to the old marker set, but say so loudly.
+        markers = set("繁體東車馬語說們個過還發沒學國會來時對開關")
+        return sorted(set(text) & markers)
+    simplified = OpenCC("t2s").convert(text)
+    return sorted({a for a, b in zip(text, simplified) if a != b})
+
+
 # ─────────────────────────────────────────────────────────────────────
 # A1 — server boots on this interpreter with a real backend, no ctranslate2
 # ─────────────────────────────────────────────────────────────────────
@@ -162,10 +209,14 @@ def a2():
     dt = time.perf_counter() - t0
 
     expect = expect_file.read_text(encoding="utf-8").strip()
-    ok = norm(expect) in norm(got) or norm(got) in norm(expect)
+    # Edit distance, not substring containment — see cer() for why the old
+    # rule graded a one-word transcript as a pass.
+    c = cer(expect, got)
+    ok = c <= 0.15
     return _r("A2", a2.title, PASS if ok else FAIL,
-              f"expected≈{expect!r} got={got!r} ({dt:.2f}s)",
-              expected=expect, got=got, seconds=round(dt, 3), wav=str(wav))
+              f"expected={expect!r} got={got!r}  CER={c*100:.1f}% (budget 15%)  ({dt:.2f}s)",
+              expected=expect, got=got, cer=round(c, 4), seconds=round(dt, 3),
+              wav=str(wav))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -188,14 +239,30 @@ def a3():
         return _r("A3", a3.title, FAIL, "empty transcript for Mandarin fixture", wav=str(wav))
 
     has_cjk = any("一" <= c <= "鿿" for c in got)
-    # Traditional-only characters that OpenCC t2s should have removed
-    trad_markers = set("繁體東車馬語說們個過還發沒學國會來時對開關")
-    trad_hits = sorted(set(got) & trad_markers)
-    status = PASS if (has_cjk and not trad_hits) else (FAIL if not has_cjk else SKIP)
+    # Ask OpenCC which characters are Traditional instead of guessing from a
+    # 21-character list that misses 現/幾/滯/況 (see traditional_chars()).
+    trad_hits = traditional_chars(got)
+
+    # And compare against the ground truth. "contains CJK and no Traditional
+    # characters" is satisfied by *any* Simplified sentence, including one with
+    # nothing to do with the audio — it was never an accuracy check.
+    expect_file = wav.with_suffix(".txt")
+    c = None
+    if expect_file.exists():
+        c = cer(expect_file.read_text(encoding="utf-8").strip(), got)
+
+    ok = has_cjk and not trad_hits and (c is None or c <= 0.20)
+    status = PASS if ok else FAIL
     ev = f"got={got!r} cjk={has_cjk} traditional_chars={trad_hits}"
+    if c is not None:
+        ev += f" CER={c*100:.1f}% (budget 20%)"
     if trad_hits:
-        ev += "  (t2s may not be applied — check config t2s=true)"
-    return _r("A3", a3.title, status, ev, got=got, traditional=trad_hits, wav=str(wav))
+        ev += ("  (Traditional output — the backend does NOT apply OpenCC; t2s "
+               "lives in server.py's UtteranceProcessor, which this check bypasses)")
+    if not expect_file.exists():
+        ev += "  (NO GROUND TRUTH — accuracy unverified)"
+    return _r("A3", a3.title, status, ev, got=got, traditional=trad_hits,
+              cer=None if c is None else round(c, 4), wav=str(wav))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -449,8 +516,16 @@ def _dshow_filters() -> list[dict]:
         "} }"
     )
     found: dict[str, dict] = {}
-    for view, root in (("64", "HKLM:\\SOFTWARE\\Classes\\CLSID"),
-                       ("32", "HKLM:\\SOFTWARE\\Classes\\WOW6432Node\\CLSID")):
+    # HKCR, not HKLM. COM resolves a CLSID through HKEY_CLASSES_ROOT, which is
+    # HKCU\Software\Classes merged OVER HKLM\Software\Classes. The no-admin
+    # install this port ships registers the x64 filter per-user in HKCU, so an
+    # HKLM-only enumeration reported `dll=obs-virtualcam-module32.dll,
+    # views=32` and failed A8 — while an x64 CoCreateInstance of the very same
+    # CLSID returned S_OK, because it resolved the HKCU x64 entry HKLM never
+    # sees. Reading a hive COM does not consult is the same class of bug as
+    # the original Win32_PnPEntity mistake.
+    for view, root in (("64", "Registry::HKEY_CLASSES_ROOT\\CLSID"),
+                       ("32", "Registry::HKEY_CLASSES_ROOT\\WOW6432Node\\CLSID")):
         cmd = template.replace("%ROOT%", root).replace("%CAT%", DSHOW_CAT)
         for line in _ps(cmd):
             parts = line.split("|")
@@ -488,6 +563,48 @@ def _pe_machine(path: str) -> str:
 def _is_virtual(name: str) -> bool:
     n = name.lower()
     return "obs" in n or "laolao" in n or "virtual" in n
+
+
+# A PE header says who *could* load a DLL. Only CoCreateInstance says who does.
+# This is the same source a call app executes: resolve the CLSID, load the
+# in-proc server, ask for IBaseFilter. HRESULT 0x800700C1 = wrong architecture.
+_COCREATE_SRC = r'''
+import ctypes, platform, sys
+CLSID = "{A3FCE0F5-3493-419F-958A-ABA1250EC20B}"
+IID_IBaseFilter = "{56A86895-0AD4-11CE-B03A-0020AF0BA770}"
+class G(ctypes.Structure):
+    _fields_ = [("a", ctypes.c_ulong), ("b", ctypes.c_ushort),
+                ("c", ctypes.c_ushort), ("d", ctypes.c_ubyte * 8)]
+def guid(s):
+    g = G(); ctypes.OleDLL("ole32").CLSIDFromString(ctypes.c_wchar_p(s), ctypes.byref(g))
+    return g
+ctypes.windll.ole32.CoInitializeEx(None, 2)
+p = ctypes.c_void_p()
+h = ctypes.windll.ole32.CoCreateInstance(
+    ctypes.byref(guid(CLSID)), None, 1, ctypes.byref(guid(IID_IBaseFilter)),
+    ctypes.byref(p))
+print(f"{platform.machine()} 0x{h & 0xFFFFFFFF:08X}")
+'''
+
+
+def _cocreate_probe(exe: str) -> str | None:
+    """Run the CoCreateInstance probe under `exe`; return 'ARCH 0xHRESULT'."""
+    try:
+        out = subprocess.run([exe, "-c", _COCREATE_SRC], capture_output=True,
+                             text=True, timeout=90)
+    except Exception:
+        return None
+    line = (out.stdout or "").strip().splitlines()
+    return line[-1] if line else None
+
+
+def _x64_interpreter() -> str | None:
+    """An x64 python on this box — the architecture WeChat and Zoom run as."""
+    for c in (REPO / ".venv-x64" / "Scripts" / "python.exe",
+              Path.home() / "Downloads" / "laolao-tools" / "python311-x64" / "python.exe"):
+        if c.exists():
+            return str(c)
+    return None
 
 
 @check("A7", "a Laolao/OBS virtual camera is registered")
@@ -528,6 +645,24 @@ def a8():
         if mach == "AMD64(x64)":
             x64_ok = True
 
+    # ── the part that actually proves it: CoCreateInstance ────────────────
+    # A PE header only shows what *could* load. Do what a call app does.
+    here = _cocreate_probe(sys.executable)
+    x64_exe = _x64_interpreter()
+    there = _cocreate_probe(x64_exe) if x64_exe else None
+    probes = [p for p in (here, there) if p]
+    real_x64 = any(p.startswith("AMD64") and p.endswith("0x00000000") for p in probes)
+    real_arm = any(p.startswith("ARM64") and p.endswith("0x00000000") for p in probes)
+    saw_x64_probe = any(p.startswith("AMD64") for p in probes)
+
+    if saw_x64_probe:
+        x64_ok = real_x64                    # measured beats inferred
+        arm64_ok = real_arm or arm64_ok
+        proof = f"CoCreateInstance probes: {probes} (0x800700C1 = wrong arch)"
+    else:
+        proof = ("NO x64 interpreter found — x64 loadability is INFERRED from the "
+                 "PE header, not measured. Create .venv-x64 to make this real.")
+
     # WeChat / Zoom on Windows-ARM64 are x64 images running under Prism.
     verdict = ("x64-emulated call apps CAN load it" if x64_ok
                else "NO x64 filter — emulated call apps cannot load it")
@@ -536,8 +671,9 @@ def a8():
                    "from an emulated-x64 helper process or out-of-process OBS)")
     status = PASS if x64_ok else FAIL
     return _r("A8", a8.title, status,
-              "; ".join(report) + f"  ->  {verdict}; {native}",
-              filters=virt, x64_loadable=x64_ok, arm64_loadable=arm64_ok)
+              "; ".join(report) + f"  ->  {verdict}; {native}\n{proof}",
+              filters=virt, x64_loadable=x64_ok, arm64_loadable=arm64_ok,
+              cocreate=probes)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -581,18 +717,309 @@ def a9():
               returncode=p.returncode)
 
 
-@check("A10", "one-command launch for a non-technical user")
+# CLSID of the OBS DirectShow virtual-camera filter (the device Laolao tells
+# the user to pick). Same value laolao-vcam-setup.ps1 registers.
+VCAM_CLSID = "{A3FCE0F5-3493-419F-958A-ABA1250EC20B}"
+
+LAUNCHER_BAT = REPO / "Laolao-arm64.bat"
+LAUNCH_PS1 = REPO / "docs" / "snapdragon" / "launch.ps1"
+SETUP_PS1 = REPO / "docs" / "snapdragon" / "setup-arm64.ps1"
+
+# Patterns that mean the launcher would pop a UAC prompt. A one-click launch
+# that stops on "Do you want to allow this app to make changes?" is not one
+# click, and on a locked-down family machine it is not possible at all.
+ELEVATION_MARKERS = ("-verb runas", "verb='runas'", 'verb="runas"',
+                     "requireadministrator", "requestedexecutionlevel")
+
+
+def _ps_parse_ok(path: Path) -> str:
+    """'PARSE_OK' or the first syntax errors. A launcher that cannot even be
+    tokenised fails at double-click time with a wall of red — cheap to catch."""
+    cmd = ("$e=$null;"
+           f"$null=[System.Management.Automation.PSParser]::Tokenize("
+           f"(Get-Content -Raw -LiteralPath '{path}'),[ref]$e);"
+           "if ($e.Count) { $e | ForEach-Object { 'ERR line ' + $_.Token.StartLine "
+           "+ ': ' + $_.Message } } else { 'PARSE_OK' }")
+    out = _ps(cmd)
+    return "PARSE_OK" if out == ["PARSE_OK"] else "; ".join(out[:4]) or "no output"
+
+
+def _port_owner(port: int) -> dict | None:
+    """Who is LISTENING on a port: pid, image path, PARENT image path, cmdline.
+
+    The parent matters. A Windows venv's `python.exe` is a stub that re-execs
+    its base interpreter, and it is the *child* that owns the socket — so the
+    listener's own path is `...\\Python311-arm64\\python.exe` even when the
+    engine was correctly started from `.venv-arm64`. Judging the lane by the
+    listener's path alone reports the wrong interpreter.
+    """
+    out = _ps(
+        f"$c = Get-NetTCPConnection -LocalPort {port} -State Listen "
+        "-ErrorAction SilentlyContinue | Select-Object -First 1;"
+        "if ($c) {"
+        " $p = Get-CimInstance Win32_Process -Filter \"ProcessId=$($c.OwningProcess)\";"
+        " $par = $null;"
+        " if ($p) { $par = Get-CimInstance Win32_Process -Filter \"ProcessId=$($p.ParentProcessId)\" -ErrorAction SilentlyContinue }"
+        ' "$($p.ProcessId)|$($p.Name)|$($p.ExecutablePath)|$($par.ExecutablePath)|$($p.CommandLine)" }'
+    )
+    if not out:
+        return None
+    parts = (out[0].split("|", 4) + ["", "", "", "", ""])[:5]
+    return {"pid": parts[0], "name": parts[1], "path": parts[2],
+            "parent_path": parts[3], "cmdline": parts[4]}
+
+
+def _pids(procname: str) -> list[str]:
+    return _ps(f"Get-Process {procname} -ErrorAction SilentlyContinue | "
+               "Select-Object -ExpandProperty Id")
+
+
+def _run_launcher(args: list[str], timeout: int) -> subprocess.CompletedProcess:
+    """Invoke the .bat exactly as a double-click would, minus the read-me pause."""
+    import os
+    env = {**os.environ, "LAOLAO_NO_PAUSE": "1", "PYTHONIOENCODING": "utf-8"}
+    return subprocess.run(["cmd", "/c", str(LAUNCHER_BAT), *args],
+                          capture_output=True, text=True, timeout=timeout,
+                          cwd=str(REPO), env=env, encoding="utf-8", errors="replace")
+
+
+def _captions_from_port(port: int, seconds: int = 60) -> list[dict]:
+    """Stream a speech fixture at a *running* engine and collect captions.
+
+    Deliberately independent of A6: A6 proves the protocol works against a
+    server the harness was told to expect. Here the point is that the server
+    the *launcher* started is genuinely transcribing, so this re-does the round
+    trip against whatever the launcher left running.
+    """
+    import asyncio
+    import numpy as np
+    import websockets
+
+    wav = find_fixture("chinese_speech", "english_speech", "chinese", "english")
+    if wav is None:
+        return []
+    lang = "zh" if "chinese" in wav.name.lower() else "en"
+    audio = read_wav_int16(wav)
+
+    async def run():
+        async with websockets.connect(f"ws://127.0.0.1:{port}", open_timeout=10) as ws:
+            await ws.send(json.dumps({"type": "set_language", "language": lang}))
+            step = 4000
+
+            async def feed():
+                for i in range(0, len(audio), step):
+                    await ws.send(audio[i:i + step].tobytes())
+                    await asyncio.sleep(0.05)
+                quiet = np.zeros(step, dtype=np.int16)
+                for _ in range(24):
+                    await ws.send(quiet.tobytes())
+                    await asyncio.sleep(0.05)
+
+            task = asyncio.create_task(feed())
+            caps, deadline = [], time.time() + seconds
+            try:
+                while time.time() < deadline:
+                    try:
+                        msg = await asyncio.wait_for(ws.recv(), timeout=5)
+                    except asyncio.TimeoutError:
+                        if caps:
+                            break
+                        continue
+                    if isinstance(msg, bytes):
+                        continue
+                    d = json.loads(msg)
+                    if d.get("type") in ("partial", "final") and d.get("text", "").strip():
+                        caps.append(d)
+                        if d["type"] == "final":
+                            break
+            finally:
+                task.cancel()
+            return caps
+
+    try:
+        return asyncio.run(run())
+    except Exception:
+        return []
+
+
+@check("A10", "one-command launch: the launcher actually brings Laolao up")
 def a10():
-    cands = [REPO / "run-arm64.bat", REPO / "Laolao-arm64.bat",
-             REPO / "docs" / "snapdragon" / "launch.ps1", REPO / "run.bat"]
-    found = [p for p in cands if p.exists()]
-    if not found:
-        return _r("A10", a10.title, FAIL, "no launcher script exists yet")
-    return _r("A10", a10.title, SKIP if len(found) == 1 and found[0].name == "run.bat"
-              else PASS,
-              f"launchers present: {[p.name for p in found]} "
-              "(run.bat alone is the x86 path, not an ARM64 one-click)",
-              launchers=[str(p) for p in found])
+    """Run the launcher. Do not admire it.
+
+    The original version of this check listed launcher filenames and called
+    that a PASS. That grades the existence of a file, not the criterion —
+    a launcher that crashes on line 1 passed it. A10 is the only criterion
+    whose subject is a *non-technical user*, so it has to answer: after one
+    double-click, with no admin rights, is the product actually up?
+
+    So this now tears the machine down to a cold state, runs the launcher the
+    way Explorer would, and then verifies the outcome from the outside:
+    the caption engine is transcribing, OBS is running, and the virtual camera
+    is registered to a DLL the call apps can load. Then it runs it a second
+    time to prove idempotence, and stops everything again.
+
+    Set LAOLAO_A10_STATIC=1 to skip the live part (files + syntax only, which
+    can never be better than SKIP).
+    """
+    import os
+
+    port = json.loads((REPO / "config.json").read_text()).get("ws_port", 8765)
+    notes: list[str] = []
+
+    # ── static: the artefacts must exist and be launchable ───────────────
+    for p in (LAUNCHER_BAT, LAUNCH_PS1, SETUP_PS1):
+        if not p.exists():
+            return _r("A10", a10.title, FAIL, f"missing launcher artefact: {p}")
+
+    for p in (LAUNCH_PS1, SETUP_PS1):
+        verdict = _ps_parse_ok(p)
+        if verdict != "PARSE_OK":
+            return _r("A10", a10.title, FAIL, f"{p.name} does not parse: {verdict}")
+    notes.append("files present, PowerShell parses")
+
+    blob = "\n".join(p.read_text(encoding="utf-8", errors="replace").lower()
+                     for p in (LAUNCHER_BAT, LAUNCH_PS1, SETUP_PS1))
+    hits = [m for m in ELEVATION_MARKERS if m in blob]
+    if hits:
+        return _r("A10", a10.title, FAIL,
+                  f"launcher would request elevation ({hits}) — a UAC prompt is "
+                  "not a one-click launch for a non-technical user")
+    elevated = (_ps("(New-Object Security.Principal.WindowsPrincipal("
+                    "[Security.Principal.WindowsIdentity]::GetCurrent()))"
+                    ".IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)")
+                or ["?"])[0]
+    notes.append(f"no elevation markers (harness itself elevated={elevated})")
+
+    if platform.system() != "Windows":
+        return _r("A10", a10.title, SKIP,
+                  "static checks only — not on Windows. " + "; ".join(notes))
+    if os.environ.get("LAOLAO_A10_STATIC"):
+        return _r("A10", a10.title, SKIP,
+                  "LAOLAO_A10_STATIC=1, live launch skipped. " + "; ".join(notes))
+
+    # ── cold state ───────────────────────────────────────────────────────
+    try:
+        _run_launcher(["-Stop"], timeout=240)
+    except subprocess.TimeoutExpired:
+        return _r("A10", a10.title, FAIL, "launcher -Stop hung")
+    cold_bad = []
+    if _port_owner(port):
+        cold_bad.append(f"something still listening on {port}")
+    if _pids("obs64"):
+        cold_bad.append("obs64 still running")
+    if cold_bad:
+        return _r("A10", a10.title, FAIL,
+                  "-Stop left the machine dirty (" + "; ".join(cold_bad) +
+                  ") — cannot test a cold start")
+    notes.append("cold: port free, OBS down")
+
+    # ── the double-click ─────────────────────────────────────────────────
+    t0 = time.perf_counter()
+    try:
+        # -NoBrowser only suppresses the caption *preview* window; the engine
+        # and camera come up exactly as they would for a real user.
+        first = _run_launcher(["-NoBrowser"], timeout=1800)
+    except subprocess.TimeoutExpired:
+        _run_launcher(["-Stop"], timeout=240)
+        return _r("A10", a10.title, FAIL, "launcher never finished (30 min)")
+    dt = time.perf_counter() - t0
+    if first.returncode != 0:
+        tail = (first.stdout or "")[-900:] + (first.stderr or "")[-300:]
+        _run_launcher(["-Stop"], timeout=240)
+        return _r("A10", a10.title, FAIL,
+                  f"launcher exited {first.returncode} after {dt:.0f}s\n{tail.strip()}")
+    notes.append(f"launcher exit 0 in {dt:.0f}s")
+
+    failures: list[str] = []
+
+    # 1. the caption engine is up, and it is the native ARM64 venv
+    owner = _port_owner(port)
+    if not owner:
+        failures.append(f"nothing listening on {port} after launch")
+    else:
+        notes.append(f"engine pid={owner['pid']} cmd={owner['cmdline'][:60]!r}")
+        lineage = (owner["path"] + " " + owner["parent_path"]).lower()
+        if "venv-arm64" not in lineage:
+            failures.append("the engine is not from .venv-arm64 "
+                            f"(image={owner['path']} parent={owner['parent_path']}) — "
+                            "the launcher must not silently use a system interpreter")
+        else:
+            notes.append("engine lane = .venv-arm64 (native ARM64)")
+
+    # 2. it is transcribing, not merely bound to a socket
+    caps = _captions_from_port(port) if owner else []
+    if owner and not caps:
+        failures.append("engine is listening but produced no caption for a speech fixture")
+    elif caps:
+        notes.append(f"captions={[c['text'] for c in caps][-2:]}")
+
+    # 3. the camera the user is about to be told to pick actually exists,
+    #    and is backed by a DLL their (emulated x64) call app can load
+    obs = _pids("obs64")
+    if not obs:
+        failures.append("OBS is not running — nothing is producing camera frames")
+    else:
+        notes.append(f"obs64 pid={obs[0]}")
+    virt = [f for f in _dshow_filters() if _is_virtual(f["name"])]
+    machines = {f["name"]: _pe_machine((f.get("dll") or "").strip('"')) for f in virt}
+    if not virt:
+        failures.append("no virtual camera registered after launch")
+    elif "AMD64(x64)" not in machines.values():
+        failures.append(f"virtual camera is registered to {machines} — x64 call apps "
+                        "(WeChat/Zoom) would see it in the picker and get a dead feed")
+    else:
+        notes.append(f"camera filter {machines}")
+
+    # 3b. and it was registered somewhere an ordinary user can write.
+    # HKLM needs administrator; HKCU does not, and HKEY_CLASSES_ROOT merges the
+    # two so DirectShow resolves either. If the only registration is in HKLM,
+    # this machine was set up by an admin and the launcher is not really a
+    # no-admin one-click for the next person.
+    hive = _ps(
+        f"$c='{VCAM_CLSID}';"
+        "'HKCU=' + (Test-Path \"HKCU:\\SOFTWARE\\Classes\\CLSID\\$c\\InprocServer32\") +"
+        "' HKLM=' + (Test-Path \"HKLM:\\SOFTWARE\\Classes\\CLSID\\$c\\InprocServer32\")")
+    hive_s = hive[0] if hive else "unknown"
+    if "HKCU=True" not in hive_s:
+        failures.append(f"camera not registered per-user ({hive_s}) — "
+                        "that registration needed administrator rights")
+    else:
+        notes.append(f"registration {hive_s} (per-user, no admin)")
+
+    # 4. idempotent: a second double-click must not duplicate or break anything
+    try:
+        second = _run_launcher(["-NoBrowser"], timeout=900)
+    except subprocess.TimeoutExpired:
+        second = None
+    if second is None or second.returncode != 0:
+        failures.append("second run of the launcher did not succeed (not idempotent)")
+    else:
+        owner2, obs2 = _port_owner(port), _pids("obs64")
+        if owner and (not owner2 or owner2["pid"] != owner["pid"]):
+            failures.append(f"second run replaced the engine "
+                            f"({owner['pid']} -> {owner2 and owner2['pid']})")
+        elif obs and obs2 and set(obs2) != set(obs):
+            failures.append(f"second run restarted OBS ({obs} -> {obs2})")
+        else:
+            notes.append("second run reused the running engine and camera")
+
+    # ── put the machine back ─────────────────────────────────────────────
+    try:
+        _run_launcher(["-Stop"], timeout=240)
+    except subprocess.TimeoutExpired:
+        failures.append("-Stop hung at cleanup")
+    if _port_owner(port):
+        failures.append("-Stop did not free the port")
+    else:
+        notes.append("stopped cleanly")
+
+    status = FAIL if failures else PASS
+    ev = "  ".join(notes)
+    if failures:
+        ev = "FAILURES: " + "; ".join(failures) + "\n          " + ev
+    return _r("A10", a10.title, status, ev,
+              launchers=[str(LAUNCHER_BAT), str(LAUNCH_PS1), str(SETUP_PS1)],
+              seconds=round(dt, 1), captions=caps, filters=virt, failures=failures)
 
 
 # ─────────────────────────────────────────────────────────────────────

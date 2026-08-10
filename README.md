@@ -52,12 +52,17 @@ Until then, build from source in under 5 minutes — see **Quick Start** below.
 | macOS Apple Silicon (M1/M2/M3/M4) | ✅ Supported | MLX — Neural Engine |
 | macOS Intel | ⚠️ Untested | CPU faster-whisper |
 | Windows 10/11 (x86-64) | ✅ Beta | CPU faster-whisper (CUDA if available) |
+| Windows 11 on ARM64 (Snapdragon X / X2 Elite) | ✅ Beta | ONNX Runtime — **Hexagon NPU** via QNN |
 | Linux | ❌ Not yet | — |
 
 **Windows notes:**
 - Requires OBS Studio 28+ installed (provides the virtual camera driver)
 - Virtual camera requires a GUI/interactive session — does not work over SSH
 - Tested on Intel i7 with OBS 30
+
+**Snapdragon / ARM64 notes:** different lane entirely — no `faster-whisper`, no
+Electron shell, and OBS installs itself. See
+[Quick Start — Windows on ARM64](#quick-start--windows-on-arm64-snapdragon) below.
 
 ---
 
@@ -74,6 +79,13 @@ Until then, build from source in under 5 minutes — see **Quick Start** below.
 - Python 3.10+ from [python.org](https://www.python.org/downloads/)
 - [OBS Studio 28+](https://obsproject.com/) installed (does **not** need to be running)
 - A microphone
+
+### Windows on ARM64 (Snapdragon)
+- Windows 11 on a Snapdragon X / X2 Elite PC
+- Python 3.10+ **ARM64 build** from [python.org](https://www.python.org/downloads/windows/) — pick *"Windows installer (ARM64)"*. An x64 Python cannot reach the NPU.
+- OBS — **do not install it**; the launcher downloads a portable ARM64 copy itself
+- A webcam, and **a headset** (see the constraints table — there is no echo cancellation on this path)
+- No administrator rights are needed at any point
 
 > **OBS conflict note:** Laolao and OBS share the same virtual camera slot ("OBS Virtual Camera"). If OBS's virtual camera is active at the same time as Laolao, they conflict — only one can use the slot at a time. Quit Laolao to hand it back to OBS, or vice versa.
 
@@ -180,6 +192,73 @@ On first launch Windows will ask for **microphone access** — click Allow. If t
 ### 6. Select the camera in your call app
 
 Open camera settings in your video call app and choose **"OBS Virtual Camera"**.
+
+---
+
+## Quick Start — Windows on ARM64 (Snapdragon)
+
+Snapdragon PCs run a different lane. `faster-whisper` cannot install there at
+all — its `ctranslate2` dependency publishes no win-arm64 build — so Whisper
+runs on **ONNX Runtime against the Hexagon NPU** instead, at **88 ms partial /
+93 ms final**. `pyvirtualcam` has no ARM64 wheel either, so a portable copy of
+**OBS ARM64 does the compositing and provides the camera**, and there is no
+Electron app in the loop.
+
+The whole thing is one double-click.
+
+### 1. Install Python (the only manual step)
+
+Download from [python.org](https://www.python.org/downloads/windows/) and pick
+**"Windows installer (ARM64)"** — 3.11 or 3.12. Tick **"Add python.exe to
+PATH"**. The ARM64 build matters: an x64 Python runs under emulation and cannot
+reach the NPU.
+
+### 2. Get Laolao
+
+```cmd
+git clone https://github.com/BensonRen/Laolao
+```
+
+### 3. Double-click `Laolao-arm64.bat`
+
+That is the whole setup. On the first run it creates the Python environment,
+installs `requirements-arm64.txt`, downloads the Whisper NPU model (~200 MB)
+and a portable OBS ARM64 (~167 MB), and registers the virtual camera **for your
+user only** — no installer, no admin password, nothing written to `Program
+Files`. Later runs take about 6 seconds, and running it twice is harmless.
+
+### 4. Select the camera in your call app
+
+The launcher ends by telling you this, but: in WeChat / Zoom / Teams, open the
+video settings and choose **"OBS Virtual Camera"**. If the call app was already
+open, quit it completely and reopen it — call apps only enumerate cameras at
+launch.
+
+Double-click **`Laolao-stop.bat`** when you're done; that hands your normal
+webcam back to other apps.
+
+| Command | What it does |
+|---|---|
+| `Laolao-arm64.bat` | Start everything (installs whatever is missing) |
+| `Laolao-stop.bat` | Stop everything |
+| `Laolao-arm64.bat -Status` | Report what is running |
+| `Laolao-arm64.bat -Arch arm64` | Re-register the camera for ARM64-native call apps |
+| `Laolao-arm64.bat -Setup` | Force the first-run setup to run again |
+
+### Known constraints on ARM64
+
+| Constraint | Why | What it means for you |
+|---|---|---|
+| Models limited to `tiny` / `base` / `large-v3-turbo` | Only those have a precompiled Qualcomm NPU export. `small` and `medium` fall back to the CPU and run ~25× slower | `config.json` still says `small`; the ARM64 backend substitutes `base` and says so in the log. Set `"model": "large-v3-turbo"` for the best Chinese accuracy (CER 0.049 vs 0.196) |
+| **Energy VAD only** | `silero-vad` pulls PyTorch, which has no win-arm64 build | Slightly blunter speech detection. Lower `silence_rms` (e.g. `0.004`) if quiet speech is missed |
+| **No echo cancellation** | The mic is captured by Python, not by Chromium | **Wear a headset.** On speakers, the other person's voice gets transcribed as your caption |
+| No toolbar / hot-swap language | There is no Electron control window on this path | Language, colours and caption size come from `config.json` and the overlay's URL parameters |
+| **The camera works for x64 apps *or* ARM64 apps, not both** | Windows-on-ARM64 has a single 64-bit COM slot for the camera, and OBS ships no ARM64X filter | Default is x64, which is what WeChat, Zoom and Teams are. If the camera shows up in the picker but the picture is **black**, your app is ARM64-native — run `Laolao-arm64.bat -Arch arm64` |
+| `run.bat` / `setup.bat` don't apply | They install `faster-whisper` and expect a `venv\` | Use `Laolao-arm64.bat`; it maintains `.venv-arm64` |
+
+Full engineering detail — including the alternative Electron + emulated-x64
+camera path, kept documented as a fallback — is in
+[`docs/snapdragon/`](docs/snapdragon/).
 
 ---
 
@@ -422,6 +501,18 @@ portrait view.
 - The OBS virtual camera driver requires an interactive GUI session on Windows
 - Launch the app from the desktop, not via SSH
 
+**Snapdragon/ARM64: "OBS Virtual Camera" appears in the picker but the picture is black**
+- Your call app is ARM64-native, and the camera is registered for x64 apps (the default, because WeChat/Zoom are x64). Windows-on-ARM64 has only one 64-bit slot for it — run `Laolao-arm64.bat -Arch arm64` and reopen the call app
+- Visible-but-dead is the expected symptom of the wrong architecture, not a broken install
+
+**Snapdragon/ARM64: nothing starts, or it says the setup failed**
+- `Laolao-arm64.bat -Status` reports what is up. The engine log is `..\laolao-tools\run\server.log`
+- "No native ARM64 Python found" means the Python you installed is the x64 build — reinstall using the **ARM64** installer from python.org
+- `Laolao-arm64.bat -Setup` redoes the environment from scratch
+
+**Snapdragon/ARM64: my captions include the other person's voice**
+- There is no echo cancellation on this path (Python captures the mic directly, not Chromium). Use a headset
+
 ---
 
 ## Roadmap
@@ -508,6 +599,7 @@ MIT — free to use, modify, and distribute.
 - [sounddevice](https://python-sounddevice.readthedocs.io/) — audio capture (MIT)
 - [websockets](https://websockets.readthedocs.io/) — WebSocket server (BSD)
 - [pyvirtualcam](https://github.com/letmaik/pyvirtualcam) — virtual camera output (MIT)
+- [ONNX Runtime](https://onnxruntime.ai/) + [Qualcomm AI Hub](https://aihub.qualcomm.com/) — Whisper on the Hexagon NPU (MIT / BSD-3)
 - [Electron](https://www.electronjs.org/) — desktop app shell (MIT)
 - [OBS Studio](https://obsproject.com/) — Camera Extension / DirectShow driver (GPL)
 

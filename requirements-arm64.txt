@@ -1,0 +1,32 @@
+# Laolao - Python dependencies for Windows on ARM64 (Snapdragon)
+# Install: pip install --only-binary=:all: -r requirements-arm64.txt
+#
+# Use this file INSTEAD of requirements.txt on win-arm64. Three packages in
+# that file have no win-arm64 distribution and cannot be built here either
+# (the machine has no MSVC toolchain):
+#
+#   faster-whisper  -> needs ctranslate2, no win-arm64 wheel or sdist that builds
+#   silero-vad      -> pulls torch, which has no win-arm64 build  (EnergyVAD is used)
+#   pyvirtualcam    -> no win-arm64 wheel  (OBS composites and owns the camera instead)
+#
+# --only-binary=:all: is not optional. Without it pip tries a source build and
+# fails several minutes later with a compiler error instead of immediately.
+
+# Speech-to-text on the Hexagon NPU. onnxruntime-qnn is a plugin execution
+# provider package and pulls onnxruntime itself.
+onnxruntime-qnn>=2.4.0
+
+# Whisper vocabulary. `tokenizers` publishes a win_arm64 wheel; `tiktoken`
+# (the openai-whisper tokenizer path) does not.
+tokenizers>=0.23.1
+huggingface_hub>=1.0
+httpx>=0.28
+
+numpy>=1.24.0
+sounddevice>=0.4.6
+websockets>=12.0
+
+# Traditional -> Simplified Chinese conversion (applied to all zh/yue output)
+opencc-python-reimplemented>=0.1.7
+
+Pillow>=10.0.0
