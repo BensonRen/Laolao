@@ -359,13 +359,16 @@ if ($NoCamera) {
 
 # -------------------------------------------------- 4. the caption window ---
 Write-Step '[4/4] Opening the caption window'
-$overlayUrl = 'file:///' + ($OverlayHtml -replace '\\', '/') + "?output=1&port=$Port"
+$overlayUrl = 'file:///' + ($OverlayHtml -replace '\\', '/') + "?output=1&controls=1&port=$Port"
 if ($NoBrowser) {
     Write-Ok "skipped (-NoBrowser). It lives at: $overlayUrl"
 } else {
-    # `?output=1` is the chrome-free display-only overlay: no toolbar, and it
-    # never opens the webcam or the microphone, so it cannot fight with OBS
-    # over the camera or double-feed audio to the engine.
+    # `?output=1` is the chrome-free display overlay: it never opens the webcam
+    # or the microphone, so it cannot fight OBS over the camera or double-feed
+    # audio to the engine. `&controls=1` adds the caption-language selector and
+    # the audio level meter, which is the only way to switch between Mandarin
+    # and Cantonese on this path — there is no Electron control window here, and
+    # without it the language is frozen to whatever config.json says.
     $edge = @("${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
               "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe") |
             Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
@@ -379,6 +382,9 @@ if ($NoBrowser) {
         $profileDir = Join-Path $RunDir 'caption-window-profile'
         try {
             Start-Process $edge -ArgumentList @(
+                # 920x340 fits the panel toolbar on one row with room to spare.
+                # Note --window-size only applies the first time a profile is
+                # created; Chromium remembers the size the user leaves it at.
                 "--app=$overlayUrl", '--window-size=920,340',
                 "--user-data-dir=$profileDir",
                 '--no-first-run', '--no-default-browser-check') | Out-Null

@@ -573,6 +573,30 @@
     body.output-mode #preview-wait,
     body.output-mode #picker { display: none !important; }
 
+    /* ── Panel mode (?output=1&controls=1) ──
+       The caption window on the OBS path, where there is no Electron control
+       window to host a toolbar. Puts back only the controls that can actually
+       do something from a separate process: the caption language (which is
+       applied by the server over the WebSocket), the audio level meter and VAD
+       dot (server-driven), the UI-language selector (purely local text) and
+       help. Everything else is appearance, and appearance lives in OBS's own
+       browser source — a different browser context that this window's
+       localStorage cannot reach. */
+    /* Wrap rather than clip. It fits on one row at the default 920px, but the
+       user can resize this window and the UI-language labels differ in width
+       between locales — a toolbar that overflows would silently swallow
+       whichever control sits last. */
+    body.panel-mode #toolbar { display: flex !important; flex-wrap: wrap; row-gap: 6px; }
+    body.panel-mode .tb-spacer { flex: 1 1 auto; min-width: 0; }
+    /* :not(.hidden) matters — #onboard is toggled by a `hidden` class, and a
+       bare `display:flex !important` would pin the guide permanently open. */
+    body.panel-mode #onboard:not(.hidden) { display: flex !important; }
+    body.panel-mode #toolbar .adv,
+    body.panel-mode #cam-toggle,
+    body.panel-mode #simple-toggle { display: none !important; }
+    /* Captions sit below the toolbar rather than under it. */
+    body.panel-mode #captions { top: 52px; }
+
     /* ── OBS chroma key ── */
     body.chromakey { background: #00ff00; }
     body.chromakey #camera { display: none; }
@@ -777,12 +801,25 @@ const CHROMA_KEY = params.has('chromakey');
 // un-mirrored, mic-less, and read-only on localStorage (the control window
 // owns all settings; we follow them via `storage` events).
 const IS_OUTPUT  = params.get('output') === '1';
+// Panel mode (?output=1&controls=1): a caption window that ALSO carries the
+// few controls that can work when Laolao is composited by OBS rather than by
+// Electron. It shows captions like any output window but never opens the
+// camera (OBS owns it) and never streams the mic.
+//
+// Deliberately narrow. This window and OBS's browser source are separate
+// browser contexts — OBS embeds its own CEF — so `storage` events cannot
+// travel between them and none of the appearance settings would reach the
+// composited frame. Only what is routed through the *server* actually takes
+// effect, which is the caption language. Exposing colour or width buttons
+// here would give the user controls that silently do nothing.
+const IS_PANEL   = IS_OUTPUT && params.get('controls') === '1';
 
 document.documentElement.style.setProperty('--font-size', FONT_SIZE + 'px');
 document.documentElement.style.setProperty('--bg', BG_COLOR);
 document.documentElement.style.setProperty('--fade-ms', FADE_MS + 'ms');
 if (CHROMA_KEY) document.body.classList.add('chromakey');
 if (IS_OUTPUT)  document.body.classList.add('output-mode');
+if (IS_PANEL)   document.body.classList.add('panel-mode');
 
 // Electron control window: the output window is the ONLY camera consumer
 // (dual getUserMedia wedges USB cams — EMEET C950 delivers black frames).
@@ -802,8 +839,10 @@ diagLog('overlay loaded');
 // Settings writes go through these so the output window never writes (its
 // stale copies would fight the control window via storage events).
 const _ls = window.localStorage;
-function store(key, val)  { if (!IS_OUTPUT) _ls.setItem(key, val); }
-function unstore(key)     { if (!IS_OUTPUT) _ls.removeItem(key); }
+// The panel is the only output-mode window allowed to write: it is the one
+// the user actually operates, so its language choice must survive a restart.
+function store(key, val)  { if (!IS_OUTPUT || IS_PANEL) _ls.setItem(key, val); }
+function unstore(key)     { if (!IS_OUTPUT || IS_PANEL) _ls.removeItem(key); }
 
 // ─── UI language (i18n) ────────────────────────────────────────
 // The dictionary lives in overlay/i18n.js (window.LAOLAO_I18N). This is the
@@ -1526,6 +1565,10 @@ if (!IS_OUTPUT && !localStorage.getItem(ONBOARD_KEY)) showOnboard();
 // "no camera chosen yet" case, resolved later via storage events.
 let outputCamRetry = null;
 function outputStartCamera() {
+  // The panel is a captions-and-controls window on the OBS path. OBS owns the
+  // physical webcam there, and only one program can hold it — opening it here
+  // would take the picture away from the thing actually being broadcast.
+  if (IS_PANEL) { diagLog('outputStartCamera: panel mode, OBS owns the camera'); return; }
   if (camVideo.srcObject) { diagLog('outputStartCamera: already have a stream'); return; }
   clearTimeout(outputCamRetry);
   const savedId = localStorage.getItem(SAVED_CAM_KEY);
