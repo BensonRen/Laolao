@@ -260,13 +260,20 @@ function findObsWinBin() {
   // build of the filter), while the x64 registration lives in a view reg.exe
   // only reaches via /reg:32 — and PowerShell's HKLM: provider shows yet
   // another merge. Trusting any single view yields a confident false negative.
-  for (const keyBase of ['', '\\WOW6432Node']) {
-    const key = `HKLM\\SOFTWARE\\Classes${keyBase}\\CLSID\\${OBS_VCAM_CLSID}\\InprocServer32`;
-    for (const view of ['', '/reg:64', '/reg:32']) {
-      const dll = regQueryDefault(key, view);
-      if (dll && fs.existsSync(dll)) {
-        candidates.push(path.dirname(dll));
-        addRoot(path.resolve(path.dirname(dll), '..', '..', '..'));
+  // HKCU first: registering the filter per-user needs no admin, so that is how
+  // a normal install on this platform ends up, and HKLM may hold nothing (or a
+  // stale x86 entry). COM resolves through HKCR, which merges HKCU over HKLM —
+  // checking only HKLM finds nothing and reports "OBS not found" on a machine
+  // where the camera is installed and working.
+  for (const hive of ['HKCU', 'HKLM']) {
+    for (const keyBase of ['', '\\WOW6432Node']) {
+      const key = `${hive}\\SOFTWARE\\Classes${keyBase}\\CLSID\\${OBS_VCAM_CLSID}\\InprocServer32`;
+      for (const view of ['', '/reg:64', '/reg:32']) {
+        const dll = regQueryDefault(key, view);
+        if (dll && fs.existsSync(dll)) {
+          candidates.push(path.dirname(dll));
+          addRoot(path.resolve(path.dirname(dll), '..', '..', '..'));
+        }
       }
     }
   }
@@ -286,6 +293,9 @@ async function checkObs() {
     if (findObsMac()) return true;
   } else if (IS_WIN) {
     obsWinBin = findObsWinBin();
+    // Say what was found. "OBS not found" on a machine where OBS is installed
+    // is a confusing dead end, and without this line there is nothing to debug.
+    console.log(`[obs] detection: ${obsWinBin || 'NOT FOUND'}`);
     if (obsWinBin) return true;
   } else {
     return true;
