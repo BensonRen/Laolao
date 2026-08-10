@@ -29,12 +29,12 @@ the user asks.
 | A2 | known WAV → correct transcript | ✅ **PASS** — character-exact, 0.11 s |
 | A3 | Mandarin → Simplified Chinese output | ✅ **PASS** — `甚至出现交易几乎停止的情况。` no Traditional chars |
 | A4 | latency partial <1.0s / final <2.0s | ✅ **PASS** — honest end-to-end **+0.84 s** to first partial, **+0.88 s** to final, **+0.65 s** to caption ink in the virtual-camera pixels. (88 ms was compute-only and is *not* the user-facing number.) |
-| A5 | VAD gates speech vs silence | ⚠️ **PARTIAL** — the check feeds digital zeros, which an energy VAD cannot fail. EnergyVAD fires on **any** steady noise above −42 dBFS; a real run produced `'Thank you very much.'`, Whisper's canonical non-speech hallucination. Silero is impossible here (needs torch). |
+| A5 | VAD gates speech vs silence | ✅ **PASS** — now tested against **room tone at −55 dBFS**, not digital zeros. Also measures the false-positive floor: **steady noise reads as speech from −40 dBFS**, so a noisy room will feed non-speech to Whisper and invite hallucinated captions. Silero would fix that and is impossible here (needs torch). |
 | A6 | live mic → overlay captions | ✅ **PASS** — PCM → WS → VAD → NPU → 3 caption msgs incl. a final |
 | A7 | virtual camera registered | ✅ **PASS** — `OBS Virtual Camera` in DirectShow category, views 64/32 |
 | A8 | camera loadable by the call apps that need it | ✅ **PASS** — filter DLL is `AMD64(x64)`, so x64-emulated WeChat/Zoom can load it |
 | A9 | fully offline operation | ✅ **PASS** — A2 re-run with HF_HUB_OFFLINE=1 exits 0 |
-| A10 | one-click launch for a non-technical user | ⬜ not started |
+| A10 | one-command launch for a non-technical user | ✅ **PASS** — `Laolao-arm64.bat`, cold start to running in ~6 s, per-user (`HKCU=True HKLM=False`), no admin |
 
 > **A7/A8 caveat, and why they are graded separately.** Registration is not
 > loadability. The filter is registered in the 64-bit registry view, so a

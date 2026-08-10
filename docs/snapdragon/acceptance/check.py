@@ -338,25 +338,53 @@ def a5():
         start = 0
 
     reps = 6
-    v.reset()
-    sil = [bool(v.is_speech(np.zeros(n, dtype=np.int16))) for _ in range(reps)]
-    v.reset()
-    spk = []
-    for k in range(reps):
+    rng = np.random.default_rng(1234)      # fixed seed: this must be reproducible
+
+    def noise(dbfs):
+        """Gaussian noise whose RMS sits at `dbfs` relative to full scale."""
+        rms = (10.0 ** (dbfs / 20.0)) * 32768.0
+        return np.clip(rng.standard_normal(n) * rms, -32768, 32767).astype(np.int16)
+
+    def run(make_chunk):
+        v.reset()
+        return [bool(v.is_speech(make_chunk(k))) for k in range(reps)]
+
+    # "Silence" is ROOM TONE, not digital zeros. An energy VAD cannot fail on
+    # an all-zero buffer, so the original version of this check was passing for
+    # a reason unrelated to whether the VAD works. -55 dBFS is a quiet room.
+    QUIET_DBFS = -55.0
+    sil = run(lambda k: noise(QUIET_DBFS))
+
+    def speech_chunk(k):
         c = src[start + k * n: start + (k + 1) * n]
-        if len(c) < n:
-            c = np.pad(c, (0, n - len(c)))
-        spk.append(bool(v.is_speech(c)))
+        return np.pad(c, (0, n - len(c))) if len(c) < n else c
+
+    spk = run(speech_chunk)
+
+    # Where does it start calling steady noise "speech"? That floor is the
+    # hallucination risk: anything above it feeds non-speech to Whisper, which
+    # answers with its canonical inventions ("Thank you very much.").
+    floor = None
+    for dbfs in (-60, -55, -50, -45, -40, -35, -30, -25):
+        if any(run(lambda k, d=dbfs: noise(d))):
+            floor = dbfs
+            break
 
     detect_at = next((i + 1 for i, s in enumerate(spk) if s), None)
     ok = (not any(sil)) and any(spk)
-    ev = (f"vad={name} fixture={wav.name}  silence={sil} (want all False)  "
+    ev = (f"vad={name} fixture={wav.name}  "
+          f"room-tone@{QUIET_DBFS:.0f}dBFS={sil} (want all False)  "
           f"speech={spk} (want some True)")
     if detect_at:
         ev += f"  detected after {detect_at} chunk(s) = {detect_at * n / 16000:.2f}s"
+    ev += (f"  false-positive floor: steady noise reads as speech from "
+           f"{floor} dBFS" if floor is not None
+           else "  false-positive floor: none up to -25 dBFS")
+    if floor is not None and floor <= -40:
+        ev += "  ⚠ a noisy room will feed non-speech to Whisper and invite hallucinated captions"
     return _r("A5", a5.title, PASS if ok else FAIL, ev,
               vad=name, silence=sil, speech=spk, detect_chunk=detect_at,
-              fixture=str(wav))
+              false_positive_floor_dbfs=floor, fixture=str(wav))
 
 
 # ─────────────────────────────────────────────────────────────────────
