@@ -80,7 +80,19 @@ def get_backend(cfg: dict) -> "BaseBackend":
 # Whisper sizes with a precompiled Qualcomm QNN export. Anything else has no
 # NPU asset and silently drops to the (much slower) CPU execution provider.
 QNN_MODELS = frozenset({"tiny", "base", "large-v3-turbo"})
-QNN_DEFAULT_MODEL = "base"
+
+# large-v3-turbo, not base. Measured on Snapdragon X2 against the AISHELL-1
+# fixture, transcribing the whole clip:
+#
+#   base             83 ms   CER 15.4%   甚至出现交易几乎停止的情况   (停止 ≠ 停滞)
+#   large-v3-turbo  411 ms   CER  0.0%   甚至出现交易几乎停滞的情况
+#
+# 411 ms is still 2.4x inside the 1 s partial budget, and this is a
+# Chinese-first tool for someone who cannot hear the conversation — a wrong
+# character is not a rounding error to them, it is the sentence. The NPU is
+# fast enough that we do not have to trade accuracy for it, so we don't.
+# Cost: the first ever load compiles the QNN context (~117 s; ~6 s after).
+QNN_DEFAULT_MODEL = "large-v3-turbo"
 
 
 # Device values the ONNX backend understands. Anything else (notably "mlx",
