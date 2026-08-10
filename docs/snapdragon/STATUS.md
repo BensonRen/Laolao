@@ -82,6 +82,63 @@ camera, either:
 Emulation is used for exactly one thing — the frame sink — because that is the one
 part it handles well (A8) and STT is the part it ruins (A4).
 
+## Outcome — all 10 acceptance criteria pass
+
+Independently re-run by the orchestrator: **PASS=10 FAIL=0 SKIP=0 BLOCKED=0**.
+
+Laolao runs on Snapdragon X2 with Whisper on the **Hexagon NPU**. The native lane
+was not the risky option that barely worked — it beat x64 emulation by ~25× and is
+the only lane that meets the latency budget at all.
+
+### Shipping configuration
+
+`Laolao-arm64.bat` → `docs/snapdragon/launch.ps1` → **OBS composites** the webcam plus
+`overlay/index.html` as a browser source and publishes the virtual camera itself.
+Cold start to running ≈ 6 s. Per-user registration (`HKCU`), **no admin**.
+
+The Electron path (native ARM64 Electron → JPEG/TCP → emulated x64 `virtual_cam.py`)
+is the better *product* — it has the control window and toolbar — and after the fixes
+in this branch it does run end-to-end:
+
+```
+[obs] detection: ...\obs-arm64\data\obs-plugins\win-dshow
+[startup] virtual camera ready on :8766
+[vcam] socket connected — frames now reach the virtual camera
+capturePage: first frame 1280x720        ← clamp fix holds (was 1008x720)
+capturePage: FIRST NON-BLACK frame at frame #19
+```
+
+It is **not** the default because camera acquisition is unreliable once another
+consumer has held the device: a later quiet-machine run hung inside `getUserMedia`
+and produced zero frames. OBS and Electron cannot both own the single webcam.
+Requires `LAOLAO_PYTHON_CAMERA` pointed at an x64 interpreter (pyvirtualcam has no
+win-arm64 wheel).
+
+### Known limitations — all measured, none hidden
+
+| Limitation | Detail |
+|---|---|
+| Model sizes | Only `tiny` / `base` / `large-v3-turbo` have Qualcomm exports. `small`/`medium` silently fall back to CPU (~25× slower); `_arm64_cfg()` substitutes loudly. |
+| VAD | EnergyVAD only — Silero needs torch, which has no win-arm64 build. False-positive floor **−40 dBFS**, so a noisy room invites hallucinated captions. **A headset is a requirement, not a tip.** |
+| Echo cancellation | Absent on the OBS path (Python owns the mic, not Chromium). |
+| Call-app arch | One 64-bit CLSID slot; the x64 filter is registered for x64 WeChat/Zoom. An **ARM64-native** Zoom would need `-Arch arm64`. The wrong choice still shows in the picker and delivers a dead feed. |
+| First run | Needs network for a ~180 MB QNN asset fetched over plain `urllib`; `HF_HUB_OFFLINE` does not cover it. Steady state is fully offline. |
+| Install path | Long paths silently break QNN extraction → CPU fallback with no error. Setup warns past 90 chars. |
+| Unverified | Nobody has selected the camera inside real WeChat or Zoom. x64 DirectShow read-back is the proxy. |
+
+### What this port cost in wrong turns
+
+Seven harness bugs, every one of them a confident verdict about nothing:
+PnP enumeration for a COM filter; a single-chunk probe against a 3-frame majority
+filter; a read-timeout reported as "no server"; a Traditional-Chinese detector that
+could not detect Traditional; accuracy graded by substring containment; the wrong
+registry hive; and a launcher check that a stub `echo` would pass.
+
+The through-line of this platform is that **failures are silent** — QNN falls back to
+CPU without erroring, `device: "mlx"` picked CPU over the NPU, Chromium's window clamp
+ate the captions while every diagnostic read healthy. Grading instruments needed as
+much scepticism as the code.
+
 ## Isolation rules (avoid agents stomping each other)
 
 - WS-A owns venv `.venv-arm64` and dir `docs/snapdragon/findings/`

@@ -220,8 +220,13 @@ const OBS_VCAM_CLSID = '{A3FCE0F5-3493-419F-958A-ABA1250EC20B}';
 
 function regQueryDefault(key, view = '') {
   try {
+    // stdio pipe: a miss is the normal case across this many candidate keys,
+    // and reg.exe writes "ERROR: The system was unable to find the specified
+    // registry key" to stderr each time. Left inherited, a healthy launch
+    // prints seven scary errors before succeeding.
     const out = execSync(`reg query "${key}" /ve ${view}`.trim(),
-                         { encoding: 'utf8', timeout: 5000 });
+                         { encoding: 'utf8', timeout: 5000,
+                           stdio: ['ignore', 'pipe', 'ignore'] });
     const m = out.match(/REG_SZ\s+(.+)/);
     return m ? m[1].trim() : null;
   } catch { return null; }
