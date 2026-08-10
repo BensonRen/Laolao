@@ -30,10 +30,10 @@ the user asks.
 | A3 | Mandarin → Simplified Chinese output | ✅ **PASS** — `甚至出现交易几乎停止的情况。` no Traditional chars |
 | A4 | latency partial <1.0s / final <2.0s | ✅ **PASS** — **88 ms / 93 ms** on the Hexagon NPU (11× and 21× inside budget) |
 | A5 | VAD gates speech vs silence | ✅ **PASS** (EnergyVAD; Silero not yet installed natively) |
-| A6 | live mic → overlay captions | ⬜ not started |
+| A6 | live mic → overlay captions | ✅ **PASS** — PCM → WS → VAD → NPU → 3 caption msgs incl. a final |
 | A7 | virtual camera registered | ✅ **PASS** — `OBS Virtual Camera` in DirectShow category, views 64/32 |
 | A8 | camera loadable by the call apps that need it | ✅ **PASS** — filter DLL is `AMD64(x64)`, so x64-emulated WeChat/Zoom can load it |
-| A9 | fully offline operation | ⬜ not started |
+| A9 | fully offline operation | ✅ **PASS** — A2 re-run with HF_HUB_OFFLINE=1 exits 0 |
 | A10 | one-click launch for a non-technical user | ⬜ not started |
 
 > **A7/A8 caveat, and why they are graded separately.** Registration is not

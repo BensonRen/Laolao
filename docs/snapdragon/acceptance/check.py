@@ -308,51 +308,96 @@ def a6():
     except Exception as e:
         return _r("A6", a6.title, BLOCKED, f"websockets not installed: {e!r}")
 
+    import socket
+    import numpy as np
+
     cfg = json.loads((REPO / "config.json").read_text())
     port = cfg.get("ws_port", 8765)
-    wav = find_fixture("english", "chinese")
+
+    # Probe the port FIRST. Otherwise a message-read timeout is indistinguishable
+    # from an absent server: asyncio.TimeoutError is an alias of TimeoutError,
+    # which subclasses OSError, so "server never replied" was being reported as
+    # "no server is running" — a genuinely misleading diagnosis.
+    s = socket.socket()
+    s.settimeout(2)
+    try:
+        s.connect(("127.0.0.1", port))
+    except OSError as e:
+        return _r("A6", a6.title, BLOCKED,
+                  f"nothing listening on 127.0.0.1:{port} ({e!r}) — "
+                  "start server.py --no-mic first")
+    finally:
+        s.close()
+
+    # Match the fixture's language to the server, else an English clip decoded
+    # as Chinese yields real-but-nonsense captions.
+    wav = find_fixture("english_speech", "english", "jfk")
+    lang = "en"
+    if wav is None:
+        wav = find_fixture("chinese_speech", "chinese")
+        lang = "zh"
     if wav is None:
         return _r("A6", a6.title, BLOCKED, "no fixture to stream")
     audio = read_wav_int16(wav)
 
     async def run():
-        uri = f"ws://127.0.0.1:{port}"
-        async with websockets.connect(uri, open_timeout=5) as ws:
-            chunk = 16000 // 2  # 500 ms
+        async with websockets.connect(f"ws://127.0.0.1:{port}", open_timeout=10) as ws:
+            await ws.send(json.dumps({"type": "set_language", "language": lang}))
+            chunk = 16000 // 4  # 250 ms
+
             async def feed():
                 for i in range(0, len(audio), chunk):
                     await ws.send(audio[i:i + chunk].tobytes())
-                    await asyncio.sleep(0.15)
+                    await asyncio.sleep(0.05)
+                # Trailing silence: the server finalises an utterance only after
+                # `silence_chunks` quiet chunks. Without this the stream just
+                # stops and no final is ever emitted.
+                quiet = np.zeros(chunk, dtype=np.int16)
+                for _ in range(20):
+                    await ws.send(quiet.tobytes())
+                    await asyncio.sleep(0.05)
+
             task = asyncio.create_task(feed())
-            captions = []
+            caps, deadline = [], time.time() + 45
             try:
-                deadline = time.time() + 30
                 while time.time() < deadline:
-                    msg = await asyncio.wait_for(ws.recv(), timeout=10)
+                    try:
+                        msg = await asyncio.wait_for(ws.recv(), timeout=5)
+                    except asyncio.TimeoutError:
+                        if caps:
+                            break          # got captions, server just went quiet
+                        continue
                     if isinstance(msg, bytes):
                         continue
                     d = json.loads(msg)
                     if d.get("type") in ("partial", "final") and d.get("text", "").strip():
-                        captions.append(d)
+                        caps.append(d)
                         if d["type"] == "final":
                             break
             finally:
                 task.cancel()
-            return captions
+            return caps
 
     try:
         caps = asyncio.run(run())
-    except (OSError, ConnectionRefusedError) as e:
-        return _r("A6", a6.title, BLOCKED,
-                  f"no server on ws://127.0.0.1:{port} ({e!r}) — "
-                  "start server.py --no-mic first")
     except Exception as e:
         return _r("A6", a6.title, FAIL, f"websocket round trip failed: {e!r}")
 
     if not caps:
-        return _r("A6", a6.title, FAIL, "connected and streamed PCM but no caption arrived")
-    return _r("A6", a6.title, PASS,
-              f"{len(caps)} caption message(s); last={caps[-1]!r}", captions=caps)
+        return _r("A6", a6.title, FAIL,
+                  "connected and streamed PCM but no caption ever arrived")
+    finals = [c for c in caps if c["type"] == "final"]
+    texts = [c["text"] for c in caps]
+    expect_file = wav.with_suffix(".txt")
+    ev = (f"fixture={wav.name} lang={lang}  {len(caps)} caption msg(s), "
+          f"{len(finals)} final  texts={texts[-3:]}")
+    if expect_file.exists():
+        exp = expect_file.read_text(encoding="utf-8").strip()
+        best = max(texts, key=len)
+        ev += f"  expected≈{exp!r}"
+        if norm(exp) not in norm(best) and norm(best) not in norm(exp):
+            ev += "  (text differs from ground truth — round trip works, accuracy checked by A2)"
+    return _r("A6", a6.title, PASS, ev, captions=caps, fixture=str(wav))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -501,9 +546,39 @@ def a8():
 
 @check("A9", "runs fully offline after model download")
 def a9():
-    return _r("A9", a9.title, SKIP,
-              "verify by disabling the network adapter and re-running A2/A6; "
-              "must be demonstrated, not assumed")
+    """Re-run A2 in a subprocess with every hub client forced offline.
+
+    Not a perfect substitute for pulling the network cable (that needs admin),
+    but it is falsifiable: if any code path still reaches for the network to
+    load a model or tokenizer, these variables turn it into a hard error
+    instead of a silent download.
+    """
+    import os
+    if os.environ.get("LAOLAO_A9_CHILD"):
+        return _r("A9", a9.title, SKIP, "skipped inside the offline child run")
+
+    env = {
+        **os.environ,
+        "LAOLAO_A9_CHILD": "1",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_DATASETS_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+        "PYTHONIOENCODING": "utf-8",
+    }
+    try:
+        p = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "--only", "A2"],
+            capture_output=True, text=True, timeout=600, env=env,
+            encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        return _r("A9", a9.title, FAIL, "offline A2 run timed out")
+
+    tail = (p.stdout or "")[-700:] + (p.stderr or "")[-400:]
+    ok = p.returncode == 0 and "[PASS " in (p.stdout or "")
+    return _r("A9", a9.title, PASS if ok else FAIL,
+              f"offline A2 exit={p.returncode}\n{tail.strip()}",
+              returncode=p.returncode)
 
 
 @check("A10", "one-command launch for a non-technical user")

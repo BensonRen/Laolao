@@ -22,7 +22,7 @@ Evidence = a command and its actual output, or a file path. Never "should work".
 | H-008 | whisper.cpp upstream ships a Windows-ARM64 binary | **REFUTED** | `gh api repos/ggml-org/whisper.cpp/releases/latest` → only Win32/x64 |
 | H-009 | OBS Studio ships a native Windows ARM64 build | **CONFIRMED** | `gh api repos/obsproject/obs-studio/releases/latest` → `OBS-Studio-32.2.1-Windows-arm64.zip` |
 | H-010 | A C++ toolchain exists locally for source builds | **REFUTED** | no `cmake`, no `cl`, no `vswhere`, no Visual Studio |
-| H-011 | `silero-vad` installs on win-arm64 | **CONFIRMED** (wheel resolves) | pip dry-run → `silero-vad-6.2.1` |
+| H-011 | `silero-vad` installs on win-arm64 | ~~CONFIRMED~~ → **REFUTED** | **I got this wrong.** The dry run used `--no-deps`, which only proved silero-vad's own wheel resolves. A real install fails: every version `depends on torch>=1.12.0`, and torch has no win-arm64 distribution (H-003). Actual output: `ResolutionImpossible ... some packages in these conflicts have no matching distributions available for your environment: torch`. **Consequence: EnergyVAD is the only VAD on this platform.** `vad: auto` degrades to it correctly (`silero-vad not installed; falling back to energy VAD`), and A5 passes on EnergyVAD. Lesson: `--no-deps` availability is not installability. |
 
 ---
 
