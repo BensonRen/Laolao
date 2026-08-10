@@ -116,12 +116,27 @@ lazily — and `startCamera()` now races a 12 s timeout, retrying without the sa
 `deviceId` before walking the format ladder, so a busy camera degrades to a logged,
 recoverable failure instead of an unbounded black screen.
 
-It is **still not the default**, for a different reason than previously recorded:
-throughput is **~12 fps against a 30 fps target**, almost certainly the Adreno X2-90
-GPU-process crash forcing software rendering. The far end sees choppy video. Fixing
-that is the prerequisite for promoting this path. Also requires
-`LAOLAO_PYTHON_CAMERA` pointed at an x64 interpreter (pyvirtualcam has no win-arm64
-wheel), and only one program may hold the webcam at a time.
+Frame rate was **14 fps against a 30 fps target**, now **22 fps** — the cause was not
+the GPU at all but `setTimeout(tick, 1000/FPS)` waiting a full frame period *after*
+each frame's work, making the real period `work + 33ms`. Fixed to schedule at a fixed
+rate. Per-stage costs are now in the heartbeat:
+
+```
+frame #600 1281x720 ... | 21.8fps avg capture=10.5ms scale=5.4ms encode=4.6ms
+```
+
+**Negative result worth not repeating.** This display has `scaleFactor 1.5`, so
+`capturePage()` returns 1920×1080 physical for a 1280×720 DIP window and every frame
+was downscaled 2.25×. Sizing the window in physical pixels (with `zoomFactor`
+compensation so layout is unchanged) *did* cut capture cost 13 ms → 10.5 ms — and
+left frame rate unchanged at 21.8 fps. The bottleneck is `capturePage()`'s IPC round
+trip, not pixel throughput, so the change was reverted rather than kept for a
+composition risk it did not pay for.
+
+Still requires `LAOLAO_PYTHON_CAMERA` pointed at an x64 interpreter (pyvirtualcam has
+no win-arm64 wheel), and only one program may hold the webcam at a time. Promoting
+this path to default now depends on closing the last 22 → 30 fps gap, which lives
+inside `capturePage`.
 
 ### Known limitations — all measured, none hidden
 
