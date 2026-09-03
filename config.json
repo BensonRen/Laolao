@@ -1,6 +1,7 @@
 {
   "model": "small",
   "beam_size": 4,
+  "partial_beam_size": 1,
   "length_penalty": 1.0,
   "language": "zh",
   "t2s": true,

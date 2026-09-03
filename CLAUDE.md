@@ -62,11 +62,15 @@ Only the **output window** is captured into the virtual camera — the control U
 
 **server.py** — the captioning engine. Audio chunks flow through `UtteranceProcessor`: VAD gates accumulation into a rolling buffer; partials are transcribed every `partial_interval_s` while speaking; `silence_chunks` consecutive silent chunks finalize the utterance. If an utterance outgrows `rolling_window_s`, the whole buffer is **segment-committed** as a final caption (long sentences never lose their start) with a 0.5s overlap tail. Transcription runs on a dedicated worker thread (`_tx_worker`) so slow Whisper passes never block audio — pending partials are coalesced (only newest kept), finals always queue. Hallucinations are rejected by a chars-per-second plausibility cap (10 for CJK, 20 otherwise); rejected/empty finals emit `clear_partial` so stale partial text doesn't linger. Language can be hot-swapped mid-call via the `set_language` WS message.
 
+**Partials are decoded greedily, finals with the beam.** A partial is superseded every `partial_interval_s` and then replaced outright by the final, so beam-search latency spent there delays every caption for text nobody keeps. On the Snapdragon X2 with large-v3-turbo the split is 457 ms (greedy) against 856 ms (beam 4) — the latter fits the sub-2 s final budget but not the sub-1 s partial one. Set `partial_beam_size` equal to `beam_size` on a machine with latency to spare.
+
 **WebSocket protocol** (port 8765):
 - Server → overlay (JSON): `{"type": "partial"|"final", "text": ...}`, `{"type": "clear_partial"}` (drop the pending partial), `{"type": "clear"}`, `{"type": "stats", ...}` (backend/latency debug), `{"type": "level", ...}` (audio meter/VAD state, ~8Hz)
 - Overlay → server: JSON `{"type": "set_language", "language": "yue"}`; **binary frames are int16 PCM mic audio** (Electron control window, all platforms)
 
-**Pluggable backends** (`backends/`): auto-selects MLX (Apple Silicon) → CUDA faster-whisper → CPU faster-whisper. Each implements `transcribe(audio, language) -> str` and `is_available() -> bool`.
+**Pluggable backends** (`backends/`): auto-selects MLX (Apple Silicon) → CUDA faster-whisper → **ONNX/QNN on the Hexagon NPU (Windows on ARM64)** → CPU faster-whisper. Each implements `transcribe(audio, language, beam_size=None) -> str` and `is_available() -> bool`. The ARM64 branch is not a preference but a necessity: `faster-whisper` needs ctranslate2 and `openai-whisper` needs torch, neither of which publishes a win-arm64 build, so `backends/onnx_whisper_backend.py` is the only lane that can run there at all. `backends/__init__.py:_arm64_cfg` loudly rewrites the two shipped defaults that are silently harmful there (`device: "mlx"`, and any model with no precompiled Qualcomm export).
+
+**Beam search** (`backends/beam_search.py`): one implementation of the search — length normalisation, candidate selection, early stopping — shared by every runtime that needs us to decode ourselves. Each backend supplies a small adapter for how *its* decoder advances and reorders beams: the QNN graph is batch-1 with static shapes so beams cost one NPU call each; the ONNX graph has a dynamic batch axis so the batch dimension is the beam dimension; `backends/mlx_beam.py` exists because mlx-whisper raises `NotImplementedError` for beam search and cannot be delegated to. `beam_size: 1` skips the module entirely and takes the greedy path.
 
 **Pluggable VAD** (`vad/`): auto-selects Silero-VAD (ONNX) → EnergyVAD (RMS fallback).
 
@@ -90,7 +94,10 @@ Only the **output window** is captured into the virtual camera — the control U
 
 | Key | Default | Effect |
 |-----|---------|--------|
-| `model` | `base` | tiny/base/small/medium/large-v3 |
+| `model` | `base` | tiny/base/small/medium/large-v3/large-v3-turbo |
+| `beam_size` | `4` | Beam width for finals and window-commits; `1` = greedy |
+| `partial_beam_size` | `1` | Beam width for in-progress text — see below |
+| `length_penalty` | `1.0` | >1 favours longer output; `0` disables length normalisation |
 | `language` | `zh` | zh/yue/en/ja/ko/auto |
 | `device` | `auto` | auto/cpu/cuda/mlx |
 | `vad` | `auto` | auto/silero/energy |
@@ -104,7 +111,9 @@ Only the **output window** is captured into the virtual camera — the control U
 
 ## Testing notes
 
-- `tests/fixtures/` is gitignored — must be generated locally before inference tests run
+- `tests/fixtures/*.wav` is gitignored (via `tests/.gitignore`) — generate it locally before inference tests run. The `.source.json` / `.txt` ground truth beside each wav **is** committed, so a regenerated fixture that changes them is a red flag, not a routine diff.
+- `tests/test_beam_search.py` drives `backends/beam_search.py` against a scripted toy model — no weights, no onnxruntime, no NPU, so it runs everywhere
+- `tests/bench_decode.py` compares beam widths on real audio (CER + latency, `--snr` to degrade the audio). Run it on the machine you care about; the answer is per-platform
 - Markers: `@pytest.mark.slow` (requires model download), `@pytest.mark.macos_only`
 - `conftest.py` provides shared pytest fixtures for backend, VAD, and audio samples
 - `test_utterance_processor.py` unit-tests the caption engine with fake backend/VAD (segment-commit, clear_partial, queue path, t2s) — no model needed

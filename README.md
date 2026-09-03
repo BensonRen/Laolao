@@ -355,7 +355,10 @@ The banner auto-dismisses when the mic signal recovers.
 
 | Key | Default | Notes |
 |---|---|---|
-| `model` | `small` | `tiny` / `base` / `small` / `medium` / `large-v3` |
+| `model` | `small` | `tiny` / `base` / `small` / `medium` / `large-v3` / `large-v3-turbo` |
+| `beam_size` | `4` | Beam width for finished captions. `1` = greedy, which is faster and usually says the same thing |
+| `partial_beam_size` | `1` | Beam width for the in-progress line. Kept greedy so partials stay quick; raise it to match `beam_size` if your machine has time to spare |
+| `length_penalty` | `1.0` | Above 1 favours longer captions, `0` turns length normalisation off. Leave it alone unless captions are being cut short |
 | `language` | `zh` | Language code, or `null` for auto-detect |
 | `device` | `auto` | `auto` / `mlx` / `cuda` / `cpu` |
 | `chunk_ms` | `250` | Audio chunk size — lower = lower latency, higher CPU |
