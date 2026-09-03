@@ -688,6 +688,68 @@ MANDARIN_SOURCES: list[dict] = [
 ]
 
 
+def _aishell_source(utt_id: str, sha256: str, expected: str) -> dict:
+    """Build a MANDARIN_SOURCES entry for one AISHELL-1 test utterance.
+
+    All three clips ride in the same icefall test_wavs/ directory behind the same
+    transcript.txt, so the only per-utterance facts are the id, the checksum and
+    the tripwire transcript. Spelling that out once keeps the extra fixtures from
+    being three more copies of a 30-line record.
+    """
+    mirrors = [
+        "https://huggingface.co/zrjin/icefall-asr-aishell-zipformer-2023-10-24/"
+        f"resolve/main/test_wavs/{utt_id}.wav",
+        "https://huggingface.co/csukuangfj/"
+        "icefall-aishell-pruned-transducer-stateless3-2022-06-20/"
+        f"resolve/main/test_wavs/{utt_id}.wav",
+        "https://huggingface.co/marcoyang/"
+        "icefall-asr-aishell-zipformer-pruned-transducer-stateless7-2023-03-21/"
+        f"resolve/main/test_wavs/{utt_id}.wav",
+    ]
+    return {
+        "id": f"aishell1-{utt_id}",
+        "description": (
+            f"AISHELL-1 test-set utterance {utt_id}, redistributed as a "
+            "test_wavs/ sample in the icefall AISHELL Zipformer model repo."
+        ),
+        "wav_urls": mirrors,
+        "sha256": sha256,
+        "transcript_url": (
+            "https://huggingface.co/zrjin/icefall-asr-aishell-zipformer-2023-10-24/"
+            "resolve/main/test_wavs/transcript.txt"
+        ),
+        "transcript_key": utt_id,
+        "transcript_expected": expected,
+        "license": "Apache License 2.0 (AISHELL-1 / OpenSLR SLR33)",
+        "license_url": "https://www.openslr.org/33/",
+        "attribution": (
+            "AISHELL-1 Mandarin speech corpus, Beijing Shell Shell Technology Co., Ltd. "
+            "Released under the Apache License v2.0 via OpenSLR SLR33."
+        ),
+    }
+
+
+# Additional Mandarin utterances, each written to its own fixture file.
+#
+# MANDARIN_SOURCES above is a *fallback chain* — the first entry that downloads
+# wins and the rest are never used. These are different: one fixture each, so
+# that character error rate is measured over ~40 characters of three speakers'
+# sentences rather than the 13 characters of a single one. A CER computed on one
+# short utterance moves in 7.7% steps and cannot distinguish two decoders.
+MANDARIN_EXTRA_SOURCES: list[dict] = [
+    _aishell_source(
+        "BAC009S0764W0122",
+        "5760c7ace0923a499f605d373011c7aaf658e304a0999a493c63669c756384e1",
+        "一二线城市虽然也处于调整中",
+    ),
+    _aishell_source(
+        "BAC009S0764W0123",
+        "2c566703c6b1b075568cac56810846a48bb127c740d7a36de66084816035dd42",
+        "但因为聚集了过多公共资源",
+    ),
+]
+
+
 def _http_get(url: str, dest: Path, timeout: int = 120) -> bool:
     """Download *url* to *dest*.  Plain HTTP(S), no auth, no extra deps."""
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -925,6 +987,38 @@ def generate_test_fixtures(output_dir: Path, allow_download: bool = True) -> dic
             "(no Mandarin TTS voice; --no-download given)",
         )
 
+    # --- Extra Mandarin utterances (download only; no TTS equivalent) ---
+    # Purely additive: their absence never fails anything, but when they are
+    # present the accuracy benchmarks have real sentences to score against.
+    if allow_download:
+        for n, src_spec in enumerate(MANDARIN_EXTRA_SOURCES, start=2):
+            extra_path = output_dir / f"chinese_speech_{n}.wav"
+            if extra_path.exists():
+                created[extra_path.stem] = extra_path
+                continue
+            src = download_mandarin_fixture(extra_path, sources=[src_spec])
+            if not src:
+                print(f"[generate_test_audio] Skipped {extra_path.name} "
+                      "(download or transcript unavailable)", file=sys.stderr)
+                continue
+            write_ground_truth(
+                extra_path, src["transcript"],
+                origin="download", language="zh",
+                source_id=src["id"],
+                description=src.get("description"),
+                source_url=src["resolved_url"],
+                mirrors=src.get("wav_urls"),
+                sha256=src.get("sha256_actual"),
+                transcript_url=src["transcript_url"],
+                transcript_key=src.get("transcript_key"),
+                license=src["license"],
+                license_url=src.get("license_url"),
+                attribution=src.get("attribution"),
+                processing="peak-normalised to -3 dBFS; already 16 kHz mono 16-bit",
+            )
+            print(f"[generate_test_audio] Created {extra_path} from {src['id']} (+ ground truth)")
+            created[extra_path.stem] = extra_path
+
     # --- English TTS ---
     english_specs = [
         ("english_speech", output_dir / "english_speech.wav", ENGLISH_TEXT),
@@ -1024,11 +1118,15 @@ def write_fixture_readme(output_dir: Path, created: dict[str, Path]) -> Path:
 
 def verify_fixtures(created: dict[str, Path]) -> bool:
     """Read every generated fixture back and print what it really contains."""
-    speech = {"chinese_speech", "english_speech", "en_long_speech"}
+    # chinese_speech_2 / _3 are speech too, so match the prefix rather than
+    # listing names -- a new utterance fixture should not silently be verified
+    # as if it were allowed to be silent.
+    speech = {"english_speech", "en_long_speech"}
     all_ok = True
     print("\n[generate_test_audio] Verification (read back from disk):")
     for name, path in created.items():
-        ok, message = verify_wav(path, expect_speech=name in speech)
+        is_speech = name in speech or name.startswith("chinese_speech")
+        ok, message = verify_wav(path, expect_speech=is_speech)
         all_ok &= ok
         print(f"  {'PASS' if ok else 'FAIL'}  {message}")
     return all_ok

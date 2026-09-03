@@ -1,0 +1,21 @@
+{
+  "wav": "chinese_speech_2.wav",
+  "transcript": "一二线城市虽然也处于调整中",
+  "origin": "download",
+  "language": "zh",
+  "source_id": "aishell1-BAC009S0764W0122",
+  "description": "AISHELL-1 test-set utterance BAC009S0764W0122, redistributed as a test_wavs/ sample in the icefall AISHELL Zipformer model repo.",
+  "source_url": "https://huggingface.co/zrjin/icefall-asr-aishell-zipformer-2023-10-24/resolve/main/test_wavs/BAC009S0764W0122.wav",
+  "mirrors": [
+    "https://huggingface.co/zrjin/icefall-asr-aishell-zipformer-2023-10-24/resolve/main/test_wavs/BAC009S0764W0122.wav",
+    "https://huggingface.co/csukuangfj/icefall-aishell-pruned-transducer-stateless3-2022-06-20/resolve/main/test_wavs/BAC009S0764W0122.wav",
+    "https://huggingface.co/marcoyang/icefall-asr-aishell-zipformer-pruned-transducer-stateless7-2023-03-21/resolve/main/test_wavs/BAC009S0764W0122.wav"
+  ],
+  "sha256": "5760c7ace0923a499f605d373011c7aaf658e304a0999a493c63669c756384e1",
+  "transcript_url": "https://huggingface.co/zrjin/icefall-asr-aishell-zipformer-2023-10-24/resolve/main/test_wavs/transcript.txt",
+  "transcript_key": "BAC009S0764W0122",
+  "license": "Apache License 2.0 (AISHELL-1 / OpenSLR SLR33)",
+  "license_url": "https://www.openslr.org/33/",
+  "attribution": "AISHELL-1 Mandarin speech corpus, Beijing Shell Shell Technology Co., Ltd. Released under the Apache License v2.0 via OpenSLR SLR33.",
+  "processing": "peak-normalised to -3 dBFS; already 16 kHz mono 16-bit"
+}

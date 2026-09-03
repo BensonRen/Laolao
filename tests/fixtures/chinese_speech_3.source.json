@@ -1,0 +1,21 @@
+{
+  "wav": "chinese_speech_3.wav",
+  "transcript": "但因为聚集了过多公共资源",
+  "origin": "download",
+  "language": "zh",
+  "source_id": "aishell1-BAC009S0764W0123",
+  "description": "AISHELL-1 test-set utterance BAC009S0764W0123, redistributed as a test_wavs/ sample in the icefall AISHELL Zipformer model repo.",
+  "source_url": "https://huggingface.co/zrjin/icefall-asr-aishell-zipformer-2023-10-24/resolve/main/test_wavs/BAC009S0764W0123.wav",
+  "mirrors": [
+    "https://huggingface.co/zrjin/icefall-asr-aishell-zipformer-2023-10-24/resolve/main/test_wavs/BAC009S0764W0123.wav",
+    "https://huggingface.co/csukuangfj/icefall-aishell-pruned-transducer-stateless3-2022-06-20/resolve/main/test_wavs/BAC009S0764W0123.wav",
+    "https://huggingface.co/marcoyang/icefall-asr-aishell-zipformer-pruned-transducer-stateless7-2023-03-21/resolve/main/test_wavs/BAC009S0764W0123.wav"
+  ],
+  "sha256": "2c566703c6b1b075568cac56810846a48bb127c740d7a36de66084816035dd42",
+  "transcript_url": "https://huggingface.co/zrjin/icefall-asr-aishell-zipformer-2023-10-24/resolve/main/test_wavs/transcript.txt",
+  "transcript_key": "BAC009S0764W0123",
+  "license": "Apache License 2.0 (AISHELL-1 / OpenSLR SLR33)",
+  "license_url": "https://www.openslr.org/33/",
+  "attribution": "AISHELL-1 Mandarin speech corpus, Beijing Shell Shell Technology Co., Ltd. Released under the Apache License v2.0 via OpenSLR SLR33.",
+  "processing": "peak-normalised to -3 dBFS; already 16 kHz mono 16-bit"
+}
