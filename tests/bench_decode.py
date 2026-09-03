@@ -94,7 +94,7 @@ def read_wav(path: Path) -> tuple[np.ndarray, int]:
 def load_fixtures(only: list[str] | None) -> list[dict]:
     out = []
     for meta_path in sorted(FIXTURES.glob("*.source.json")):
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta = json.loads(meta_path.read_text(encoding="utf-8-sig"))
         stem = meta_path.name.removesuffix(".source.json")
         if only and stem not in only:
             continue
@@ -157,7 +157,8 @@ def main() -> int:
     ap.add_argument("--model", default=None, help="override config.json's model")
     args = ap.parse_args()
 
-    cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    # utf-8-sig: a config written by Notepad or PowerShell carries a BOM.
+    cfg = json.loads(Path(args.config).read_text(encoding="utf-8-sig"))
     if args.model:
         cfg["model"] = args.model
 

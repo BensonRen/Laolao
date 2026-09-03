@@ -54,6 +54,7 @@ class MLXBackend(BaseBackend):
         self.max_new_tokens = int(cfg.get("max_new_tokens", 180))
         self._beam_decoder = None
         self._beam_broken = False
+        self._warned_auto = False
 
         cache_dir = Path.home() / ".cache" / "laolao" / "models"
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -96,6 +97,16 @@ class MLXBackend(BaseBackend):
         audio_f32 = audio.astype(np.float32) / 32768.0
 
         beams = self.beam_size if beam_size is None else max(1, int(beam_size))
+        # Beam search forces a language token into the prompt, so it cannot serve
+        # "auto". mlx-whisper's own greedy path does real language detection;
+        # falling back to it is correct, where guessing English would be wrong on
+        # every non-English call.
+        if beams > 1 and language in (None, "auto"):
+            if not self._warned_auto:
+                self._warned_auto = True
+                log.info("language=auto: decoding greedily so the language can be "
+                         "detected. Set an explicit language to use beam search.")
+            beams = 1
         if beams > 1 and not self._beam_broken:
             text = self._beam_transcribe(audio_f32, language, beams)
             if text is not None:

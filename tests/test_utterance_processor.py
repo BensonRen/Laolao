@@ -366,41 +366,60 @@ def test_set_language_respects_t2s_flag():
 # Beam-width policy
 # ──────────────────────────────────────────────────────────────
 
-def test_finals_get_the_configured_beam_and_partials_stay_greedy(pushed):
-    """The accuracy/latency split that makes beam search affordable live.
+def test_partials_are_decoded_greedily(pushed):
+    """A partial is superseded every partial_interval_s and then replaced
+    outright by the final, so beam-search latency spent there delays every
+    caption for text nobody keeps.
 
-    A partial is re-transcribed every partial_interval_s and then replaced
-    outright by the final, so spending beam-search latency on it delays every
-    caption for text nobody keeps. Finals are what the reader is left with.
+    Speech only, never silence, so the utterance never finalises and every
+    backend call is provably a partial. Asserting on a mixed run instead would
+    race the partial against the final.
     """
     backend = FakeBackend(text="你好")
-    vad = ScriptedVAD([True, True, False, False])
+    vad = ScriptedVAD([True] * 6)
     proc = server.UtteranceProcessor(
         backend, vad,
         make_cfg(beam_size=4, partial_beam_size=1,
                  show_partial=True, partial_interval_s=0.0),
     )
+    for _ in range(6):
+        proc.feed(np.zeros(4000, dtype=np.int16))
+
+    assert wait_for(lambda: len(backend.beams) >= 1), "expected at least one partial"
+    assert set(backend.beams) == {1}
+
+
+def test_finals_get_the_configured_beam(pushed):
+    """Finals are what the reader is left with, so they get the full beam.
+
+    Partials are switched off, so every call is provably a final or a
+    window-commit.
+    """
+    backend = FakeBackend(text="你好")
+    vad = ScriptedVAD([True, True, False, False])
+    proc = server.UtteranceProcessor(
+        backend, vad, make_cfg(beam_size=4, show_partial=False),
+    )
     for _ in range(4):
         proc.feed(np.zeros(4000, dtype=np.int16))
 
-    assert wait_for(lambda: len(backend.beams) >= 2), "expected a partial and a final"
-    assert 1 in backend.beams, "partials should decode greedily"
-    assert 4 in backend.beams, "finals should use the configured beam width"
+    assert wait_for(lambda: len(backend.beams) >= 1), "expected a final"
+    assert set(backend.beams) == {4}
 
 
 def test_partial_beam_can_be_raised_to_match_finals(pushed):
     """A machine with latency to spare may spend it on partials too."""
     backend = FakeBackend(text="你好")
-    vad = ScriptedVAD([True, True, False, False])
+    vad = ScriptedVAD([True] * 6)
     proc = server.UtteranceProcessor(
         backend, vad,
         make_cfg(beam_size=4, partial_beam_size=4,
                  show_partial=True, partial_interval_s=0.0),
     )
-    for _ in range(4):
+    for _ in range(6):
         proc.feed(np.zeros(4000, dtype=np.int16))
 
-    assert wait_for(lambda: len(backend.beams) >= 2)
+    assert wait_for(lambda: len(backend.beams) >= 1)
     assert set(backend.beams) == {4}
 
 

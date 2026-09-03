@@ -68,9 +68,17 @@ DEFAULTS: dict = {
 
 
 def load_config() -> dict:
+    """Read config.json over the defaults.
+
+    utf-8-sig, not utf-8: Notepad and PowerShell's Set-Content both write a UTF-8
+    byte-order mark, and json.load rejects it with "Unexpected UTF-8 BOM" — so a
+    Windows user who edits their config in the obvious editor gets a crash on
+    startup with no hint that an invisible character is the reason. utf-8-sig
+    strips a BOM when present and is identical to utf-8 when it is not.
+    """
     cfg = dict(DEFAULTS)
     if CONFIG_FILE.exists():
-        with open(CONFIG_FILE) as f:
+        with open(CONFIG_FILE, encoding="utf-8-sig") as f:
             cfg.update(json.load(f))
     return cfg
 
