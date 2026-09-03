@@ -1,0 +1,18 @@
+# Laolao - win-arm64 packages that must be installed WITHOUT their dependencies.
+# Install: pip install --only-binary=:all: --no-deps -r requirements-arm64-nodeps.txt
+#
+# `tokenizers` gives us Whisper's BPE vocabulary (`tiktoken`, the openai-whisper
+# tokenizer path, has no win_arm64 wheel). It publishes a cp310-abi3 win_arm64
+# wheel of its own, but it declares a dependency on `huggingface_hub`, which
+# depends on `PyYAML` -- and PyYAML ships NO win_arm64 wheel at any version and
+# cannot be built here, because the machine has no MSVC toolchain. So a plain
+# resolve of `tokenizers` is unsatisfiable on this platform and pip fails with
+# ResolutionImpossible.
+#
+# --no-deps is safe because we never touch the part of tokenizers that needs the
+# hub: `Tokenizer.from_file()` reads a local tokenizer.json, and the model files
+# are fetched over plain HTTPS by backends/onnx_whisper_backend.py:hf_download().
+# Verified on Snapdragon X2 / Python 3.11 ARM64: `from tokenizers import Tokenizer`
+# imports cleanly with nothing else installed.
+
+tokenizers>=0.23.1

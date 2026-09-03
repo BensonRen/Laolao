@@ -11,16 +11,13 @@
 #
 # --only-binary=:all: is not optional. Without it pip tries a source build and
 # fails several minutes later with a compiler error instead of immediately.
+#
+# `tokenizers` is NOT here. It lives in requirements-arm64-nodeps.txt and must be
+# installed with --no-deps; see that file for why.
 
 # Speech-to-text on the Hexagon NPU. onnxruntime-qnn is a plugin execution
 # provider package and pulls onnxruntime itself.
 onnxruntime-qnn>=2.4.0
-
-# Whisper vocabulary. `tokenizers` publishes a win_arm64 wheel; `tiktoken`
-# (the openai-whisper tokenizer path) does not.
-tokenizers>=0.23.1
-huggingface_hub>=1.0
-httpx>=0.28
 
 numpy>=1.24.0
 sounddevice>=0.4.6

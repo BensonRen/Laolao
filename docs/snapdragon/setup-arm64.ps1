@@ -7,7 +7,8 @@
 
       1. find a NATIVE ARM64 Python 3.10+          (the one thing a human installs)
       2. create the .venv-arm64 virtual environment
-      3. install requirements-arm64.txt with --only-binary=:all:
+      3. install requirements-arm64.txt with --only-binary=:all:, then
+         requirements-arm64-nodeps.txt with --no-deps as well
          (deliberately NOT silero-vad / faster-whisper / pyvirtualcam - see that file)
       4. download the Whisper NPU model once so the first launch is not a surprise
       5. download portable OBS ARM64 and register the virtual camera per-user,
@@ -58,6 +59,7 @@ if (-not $ToolsRoot) { $ToolsRoot = (Join-Path (Split-Path $RepoRoot -Parent) 'l
 $VenvDir  = Join-Path $RepoRoot '.venv-arm64'
 $VenvPy   = Join-Path $VenvDir  'Scripts\python.exe'
 $ReqFile  = Join-Path $RepoRoot 'requirements-arm64.txt'
+$ReqNoDep = Join-Path $RepoRoot 'requirements-arm64-nodeps.txt'
 $VCamPs1  = Join-Path $PSScriptRoot 'findings\laolao-vcam-setup.ps1'
 
 Write-Host ''
@@ -170,13 +172,24 @@ Write-Ok ".venv-arm64 ready ($venvInfo)"
 # ------------------------------------------------------ 3. dependencies ----
 # One import probe decides whether pip needs to run at all - re-running setup
 # on an already-good machine should cost seconds, not minutes.
-$IMPORT_PROBE = 'import onnxruntime,numpy,sounddevice,websockets,tokenizers,opencc,huggingface_hub,httpx,PIL'
+$IMPORT_PROBE = 'import onnxruntime,numpy,sounddevice,websockets,tokenizers,opencc,PIL'
 
 Write-Step 'Python packages'
 $needPip = $Force
 if (-not $needPip) {
-    & $VenvPy -c $IMPORT_PROBE 2>$null
-    $needPip = ($LASTEXITCODE -ne 0)
+    # Soft probe. Under a non-interactive host (SSH / CI) native stderr surfaces
+    # as a terminating ErrorRecord, so the probe FAILING used to abort setup
+    # rather than trigger the install it exists to trigger.
+    try {
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        & $VenvPy -c $IMPORT_PROBE 2>&1 | Out-Null
+        $needPip = ($LASTEXITCODE -ne 0)
+    } catch {
+        $needPip = $true
+    } finally {
+        $ErrorActionPreference = $prev
+    }
 }
 if ($needPip) {
     if (-not (Test-Path $ReqFile)) { Write-Bad "missing $ReqFile"; exit 4 }
@@ -184,6 +197,9 @@ if ($needPip) {
     & $VenvPy -m pip install --quiet --disable-pip-version-check --upgrade pip
     & $VenvPy -m pip install --only-binary=:all: --disable-pip-version-check -r $ReqFile
     if ($LASTEXITCODE -ne 0) { Write-Bad "pip install failed ($LASTEXITCODE)"; exit 4 }
+    # tokenizers needs --no-deps on this platform - see requirements-arm64-nodeps.txt
+    & $VenvPy -m pip install --only-binary=:all: --no-deps --disable-pip-version-check -r $ReqNoDep
+    if ($LASTEXITCODE -ne 0) { Write-Bad "pip install (no-deps) failed ($LASTEXITCODE)"; exit 4 }
     & $VenvPy -c $IMPORT_PROBE
     if ($LASTEXITCODE -ne 0) { Write-Bad 'packages installed but still not importable'; exit 4 }
 }
