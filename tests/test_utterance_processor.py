@@ -374,12 +374,17 @@ def test_partials_are_decoded_greedily(pushed):
     Speech only, never silence, so the utterance never finalises and every
     backend call is provably a partial. Asserting on a mixed run instead would
     race the partial against the final.
+
+    rolling_window_s is raised well above the audio fed here: make_cfg's default
+    of 1.0 s is deliberately tiny so overflow is easy to hit, and an overflow
+    segment-commits the buffer as a *final*, which would put a beam-4 call into a
+    partials-only test.
     """
     backend = FakeBackend(text="你好")
     vad = ScriptedVAD([True] * 6)
     proc = server.UtteranceProcessor(
         backend, vad,
-        make_cfg(beam_size=4, partial_beam_size=1,
+        make_cfg(beam_size=4, partial_beam_size=1, rolling_window_s=30.0,
                  show_partial=True, partial_interval_s=0.0),
     )
     for _ in range(6):
@@ -413,7 +418,7 @@ def test_partial_beam_can_be_raised_to_match_finals(pushed):
     vad = ScriptedVAD([True] * 6)
     proc = server.UtteranceProcessor(
         backend, vad,
-        make_cfg(beam_size=4, partial_beam_size=4,
+        make_cfg(beam_size=4, partial_beam_size=4, rolling_window_s=30.0,
                  show_partial=True, partial_interval_s=0.0),
     )
     for _ in range(6):
