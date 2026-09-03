@@ -27,6 +27,7 @@ class FasterWhisperBackend(BaseBackend):
         model_size = cfg.get("model", "base")
         device = cfg.get("device", "cpu")
         compute_type = cfg.get("compute_type", "int8")
+        self.beam_size = max(1, int(cfg.get("beam_size", 1)))
         cache_dir = str(Path.home() / ".cache" / "laolao" / "models")
 
         log.info("Loading faster-whisper '%s' on %s (%s)…",
@@ -42,17 +43,23 @@ class FasterWhisperBackend(BaseBackend):
     # Biases Whisper toward Simplified characters when language is "zh".
     _ZH_SIMPLIFIED_PROMPT = "以下是普通话的句子。"
 
-    def transcribe(self, audio: np.ndarray, language: str | None = None) -> str:
+    def transcribe(
+        self,
+        audio: np.ndarray,
+        language: str | None = None,
+        beam_size: int | None = None,
+    ) -> str:
         if len(audio) < 1600:          # < 100 ms — skip
             return ""
+        beams = self.beam_size if beam_size is None else max(1, int(beam_size))
         audio_f32 = audio.astype(np.float32) / 32768.0
         initial_prompt = self._ZH_SIMPLIFIED_PROMPT if language == "zh" else None
         segments, _ = self._model.transcribe(
             audio_f32,
             language=language,
             initial_prompt=initial_prompt,
-            beam_size=1,
-            best_of=1,
+            beam_size=beams,
+            best_of=beams,
             temperature=0,
             condition_on_previous_text=False,
             vad_filter=False,          # Laolao does its own VAD

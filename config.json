@@ -1,5 +1,7 @@
 {
   "model": "small",
+  "beam_size": 4,
+  "length_penalty": 1.0,
   "language": "zh",
   "t2s": true,
   "device": "mlx",

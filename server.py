@@ -40,8 +40,11 @@ CONFIG_FILE = Path(__file__).parent / "config.json"
 
 DEFAULTS: dict = {
     # Transcription
-    "model": "base",           # tiny|base|small|medium|large-v3
+    "model": "base",           # tiny|base|small|medium|large-v3|large-v3-turbo
     "language": "zh",          # zh|yue|en|ja|ko|auto
+    "beam_size": 4,            # beam width for finals; 1 = greedy
+    "partial_beam_size": 1,    # beam width for in-progress text (see below)
+    "length_penalty": 1.0,     # >1 favours longer output; 0 disables normalisation
     "device": "auto",          # auto|cpu|cuda|mlx
     "compute_type": "int8",    # int8|float16|float32
     "t2s": True,               # convert Traditional → Simplified for zh/yue
@@ -174,6 +177,8 @@ class UtteranceProcessor:
         self._silence_limit = int(cfg["silence_chunks"])
         self._partial_interval = float(cfg["partial_interval_s"])
         self._show_partial = bool(cfg["show_partial"])
+        self._final_beams = max(1, int(cfg.get("beam_size", 1)))
+        self._partial_beams = max(1, int(cfg.get("partial_beam_size", 1)))
         self._language: Optional[str] = (
             cfg["language"] if cfg.get("language") != "auto" else None
         )
@@ -416,8 +421,15 @@ class UtteranceProcessor:
         return self._last_final_text.endswith(text)
 
     def _run_transcribe(self, kind: str, audio: np.ndarray, language) -> None:
+        # Partials are throwaway — superseded every partial_interval_s and then
+        # replaced outright by the final — so they are decoded greedily to keep
+        # the caption responsive. Finals and window-commits are what the reader
+        # actually keeps, so those get the full beam. Set partial_beam_size equal
+        # to beam_size to spend the extra compute on partials too.
+        beams = self._partial_beams if kind == "partial" else self._final_beams
+
         t0 = time.perf_counter()
-        text = self._backend.transcribe(audio, language)
+        text = self._backend.transcribe(audio, language, beam_size=beams)
         lat = (time.perf_counter() - t0) * 1000
         self._latencies = (self._latencies + [lat])[-50:]
         self._last_transcribe_t = time.monotonic()

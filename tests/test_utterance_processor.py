@@ -33,9 +33,11 @@ class FakeBackend:
     def __init__(self, text: str = "你好") -> None:
         self.text = text
         self.calls: list[np.ndarray] = []
+        self.beams: list[int | None] = []
 
-    def transcribe(self, audio, language=None) -> str:
+    def transcribe(self, audio, language=None, beam_size=None) -> str:
         self.calls.append(np.asarray(audio).copy())
+        self.beams.append(beam_size)
         return self.text
 
 
@@ -242,9 +244,11 @@ class SeqBackend:
     def __init__(self, texts) -> None:
         self.texts = list(texts)
         self.calls: list[np.ndarray] = []
+        self.beams: list[int | None] = []
 
-    def transcribe(self, audio, language=None) -> str:
+    def transcribe(self, audio, language=None, beam_size=None) -> str:
         self.calls.append(np.asarray(audio).copy())
+        self.beams.append(beam_size)
         return self.texts.pop(0) if self.texts else ""
 
 
@@ -356,3 +360,57 @@ def test_set_language_respects_t2s_flag():
     assert proc2._opencc is None              # en → no conversion
     proc2.set_language("yue")
     assert proc2._opencc is not None
+
+
+# ──────────────────────────────────────────────────────────────
+# Beam-width policy
+# ──────────────────────────────────────────────────────────────
+
+def test_finals_get_the_configured_beam_and_partials_stay_greedy(pushed):
+    """The accuracy/latency split that makes beam search affordable live.
+
+    A partial is re-transcribed every partial_interval_s and then replaced
+    outright by the final, so spending beam-search latency on it delays every
+    caption for text nobody keeps. Finals are what the reader is left with.
+    """
+    backend = FakeBackend(text="你好")
+    vad = ScriptedVAD([True, True, False, False])
+    proc = server.UtteranceProcessor(
+        backend, vad,
+        make_cfg(beam_size=4, partial_beam_size=1,
+                 show_partial=True, partial_interval_s=0.0),
+    )
+    for _ in range(4):
+        proc.feed(np.zeros(4000, dtype=np.int16))
+
+    assert wait_for(lambda: len(backend.beams) >= 2), "expected a partial and a final"
+    assert 1 in backend.beams, "partials should decode greedily"
+    assert 4 in backend.beams, "finals should use the configured beam width"
+
+
+def test_partial_beam_can_be_raised_to_match_finals(pushed):
+    """A machine with latency to spare may spend it on partials too."""
+    backend = FakeBackend(text="你好")
+    vad = ScriptedVAD([True, True, False, False])
+    proc = server.UtteranceProcessor(
+        backend, vad,
+        make_cfg(beam_size=4, partial_beam_size=4,
+                 show_partial=True, partial_interval_s=0.0),
+    )
+    for _ in range(4):
+        proc.feed(np.zeros(4000, dtype=np.int16))
+
+    assert wait_for(lambda: len(backend.beams) >= 2)
+    assert set(backend.beams) == {4}
+
+
+def test_beam_width_below_one_is_clamped_not_crashed(pushed):
+    """A hand-edited config.json with beam_size 0 must still caption."""
+    backend = FakeBackend(text="你好")
+    vad = ScriptedVAD([True, True, False, False])
+    proc = server.UtteranceProcessor(backend, vad, make_cfg(beam_size=0))
+    for _ in range(4):
+        proc.feed(np.zeros(4000, dtype=np.int16))
+
+    assert wait_for(lambda: len(backend.beams) >= 1)
+    assert all(b >= 1 for b in backend.beams)

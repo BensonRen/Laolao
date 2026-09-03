@@ -19,12 +19,14 @@ Two backends live here:
 
 Both share:
   * a pure-numpy log-mel front end (no torch, no librosa, no scipy)
-  * a hand-rolled greedy decode loop with KV caching
+  * a hand-rolled decode loop with KV caching — greedy, or length-normalised
+    beam search when ``beam_size`` > 1
   * HuggingFace `tokenizers` for BPE detokenisation (it has a cp310-abi3 win_arm64
     wheel; `tiktoken` does **not**, so openai-whisper's tokenizer path is unavailable)
 
 Dependencies (all have win-arm64 wheels):
-    onnxruntime, onnxruntime-qnn, numpy, tokenizers, huggingface_hub
+    onnxruntime, onnxruntime-qnn, numpy, tokenizers
+    (deliberately NOT huggingface_hub — it needs PyYAML, which has no win-arm64 wheel)
 
 Models are fetched once into ``model_dir`` (default ``<repo>/../laolao-tools/models``)
 and everything afterwards is offline.
@@ -41,6 +43,12 @@ from pathlib import Path
 import numpy as np
 
 from backends.base import BaseBackend
+from backends.beam_search import (
+    DEFAULT_BEAM_SIZE,
+    DEFAULT_LENGTH_PENALTY,
+    beam_search,
+    log_softmax,
+)
 
 log = logging.getLogger("laolao.backends.onnx")
 
@@ -76,9 +84,46 @@ _HUB_PATTERNS = [
     "onnx/decoder_model_merged{q}.onnx",
 ]
 
+# Files each lane actually opens. Listed explicitly rather than glob-downloaded
+# because we fetch them ourselves — see hf_download().
+_HF_TOKENIZER_FILES = ("tokenizer.json", "generation_config.json", "config.json")
+
+HF_ENDPOINT = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
+
+
+def hf_download(repo: str, filename: str, dest: Path, timeout: float = 120.0) -> Path:
+    """Fetch one file from a HuggingFace repo to *dest*.
+
+    Deliberately not ``huggingface_hub.snapshot_download``.  That package pulls
+    ``PyYAML``, which publishes **no** win-arm64 wheel at any version and cannot be
+    built on a machine without MSVC — so requiring it makes a clean Snapdragon
+    install impossible, which is the one platform this module exists for.  We need
+    five static files over plain HTTPS; the stdlib already does that, and the
+    Qualcomm asset fetch below has always done it this way.
+    """
+    import urllib.request
+
+    if os.environ.get("HF_HUB_OFFLINE", "").lower() in ("1", "true", "yes"):
+        raise RuntimeError(
+            f"HF_HUB_OFFLINE is set but {dest} is missing — the model was never "
+            f"downloaded on this machine. Run setup once with network access."
+        )
+
+    url = f"{HF_ENDPOINT}/{repo}/resolve/main/{filename}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    log.info("Downloading %s → %s", url, dest)
+    req = urllib.request.Request(url, headers={"User-Agent": "laolao/0.2"})
+    with urllib.request.urlopen(req, timeout=timeout) as r, open(tmp, "wb") as f:
+        while chunk := r.read(1 << 20):
+            f.write(chunk)
+    # Rename only once the body is fully on disk, so an interrupted download can
+    # never leave a truncated ONNX file that loads and then misbehaves.
+    tmp.replace(dest)
+    return dest
+
 # Language codes Laolao uses that Whisper spells differently / may not have.
 _LANG_ALIASES = {"yue": ["yue", "zh"], "zh": ["zh"], "cmn": ["zh"]}
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Pure-numpy log-mel front end
@@ -178,6 +223,8 @@ class OnnxWhisperBackend(BaseBackend):
         self.model_dir = Path(cfg.get("model_dir") or DEFAULT_MODEL_DIR) / f"whisper-{size}"
         self.quantized = bool(cfg.get("quantized", False))
         self.max_new_tokens = int(cfg.get("max_new_tokens", 180))
+        self.beam_size = max(1, int(cfg.get("beam_size", DEFAULT_BEAM_SIZE)))
+        self.length_penalty = float(cfg.get("length_penalty", DEFAULT_LENGTH_PENALTY))
         self._lock = threading.Lock()
 
         if not (self.model_dir / "tokenizer.json").exists():
@@ -242,15 +289,18 @@ class OnnxWhisperBackend(BaseBackend):
 
     # ── model fetch ──────────────────────────────────────────────────────────
     def _download(self, size: str) -> None:
-        from huggingface_hub import snapshot_download
-
         repo = _REPO_FOR_SIZE.get(size)
         if repo is None:
             raise ValueError(f"no ONNX export mapped for model size {size!r}")
         q = "_quantized" if self.quantized else ""
-        patterns = [p.format(q=q) for p in _HUB_PATTERNS]
-        log.info("Downloading %s → %s", repo, self.model_dir)
-        snapshot_download(repo, local_dir=str(self.model_dir), allow_patterns=patterns)
+        wanted = list(_HF_TOKENIZER_FILES) + [
+            f"onnx/encoder_model{q}.onnx",
+            f"onnx/decoder_model_merged{q}.onnx",
+        ]
+        for name in wanted:
+            target = self.model_dir / name
+            if not target.exists():
+                hf_download(repo, name, target)
 
     # ── availability ─────────────────────────────────────────────────────────
     @classmethod
@@ -263,7 +313,12 @@ class OnnxWhisperBackend(BaseBackend):
             return False
 
     # ── the contract ─────────────────────────────────────────────────────────
-    def transcribe(self, audio: np.ndarray, language: str | None = None) -> str:
+    def transcribe(
+        self,
+        audio: np.ndarray,
+        language: str | None = None,
+        beam_size: int | None = None,
+    ) -> str:
         if audio is None or len(audio) == 0:
             return ""
         if audio.dtype == np.int16:
@@ -271,10 +326,15 @@ class OnnxWhisperBackend(BaseBackend):
         else:
             samples = np.asarray(audio, dtype=np.float32)
 
+        beams = self.beam_size if beam_size is None else max(1, int(beam_size))
+
         with self._lock:
             features = log_mel_spectrogram(samples, self.mel_filters)[None]  # (1, mels, 3000)
             enc = self.encoder.run([self._enc_out_name], {"input_features": features})[0]
-            tokens = self._greedy_decode(enc, language)
+            if beams > 1:
+                tokens = self._beam_decode(enc, language, beams)
+            else:
+                tokens = self._greedy_decode(enc, language)
 
         text = self.tokenizer.decode(tokens, skip_special_tokens=True)
         return text.strip()
@@ -303,6 +363,62 @@ class OnnxWhisperBackend(BaseBackend):
                     )
         return z
 
+    def _filter(self, logits: np.ndarray, at_start: bool) -> np.ndarray:
+        """Mask tokens Whisper must never emit. Works on 1-D or [B, V] logits."""
+        logits[..., self.suppress] = -np.inf
+        logits[..., self.timestamp_begin:] = -np.inf     # no timestamps, ever
+        if at_start and len(self.begin_suppress):
+            logits[..., self.begin_suppress] = -np.inf
+        return logits
+
+    def _split_cache(self, named: dict) -> tuple[dict, dict]:
+        """Split one decoder output into its (encoder cross, decoder self) caches.
+
+        The cross-attention cache is a function of the audio alone, so it is
+        computed once and reused unchanged; only the self-attention cache grows and
+        needs reordering when beams are reshuffled.
+        """
+        enc, dec = {}, {}
+        for i in range(self.n_layers):
+            for kv in ("key", "value"):
+                enc[f"past_key_values.{i}.encoder.{kv}"] = named[f"present.{i}.encoder.{kv}"]
+                dec[f"past_key_values.{i}.decoder.{kv}"] = named[f"present.{i}.decoder.{kv}"]
+        return enc, dec
+
+    # ── beam search ──────────────────────────────────────────────────────────
+    def _beam_decode(
+        self, encoder_hidden: np.ndarray, language: str | None, beams: int
+    ) -> list[int]:
+        """Beam search with all beams batched into a single decoder call.
+
+        This graph keeps a dynamic batch axis, so unlike the QNN export the beams
+        fold into one run per step — the batch dimension *is* the beam dimension,
+        and reshuffling beams is a row gather on the self-attention cache.
+        """
+        prompt = self._prompt(language)
+
+        # Prompt pass at batch 1, since every beam shares this prefix.
+        feeds = self._empty_cache()
+        feeds["encoder_hidden_states"] = encoder_hidden
+        feeds["input_ids"] = np.array([prompt], dtype=np.int64)
+        feeds["use_cache_branch"] = np.array([False])
+        named = dict(zip(self._dec_out_names, self.decoder.run(self._dec_out_names, feeds)))
+
+        first_scores = log_softmax(
+            self._filter(named["logits"][0, -1].astype(np.float32), at_start=True)
+        )
+        enc_cache, dec_cache = self._split_cache(named)
+
+        return beam_search(
+            first_scores,
+            _OnnxBeamAdapter(self, encoder_hidden, enc_cache, dec_cache),
+            eot=self.eot,
+            beam_size=beams,
+            max_new_tokens=self.max_new_tokens,
+            length_penalty=self.length_penalty,
+            start_index=len(prompt) - 1,
+        )
+
     def _greedy_decode(self, encoder_hidden: np.ndarray, language: str | None) -> list[int]:
         prompt = self._prompt(language)
         generated: list[int] = []
@@ -318,13 +434,7 @@ class OnnxWhisperBackend(BaseBackend):
         for step in range(self.max_new_tokens):
             outs = self.decoder.run(self._dec_out_names, feeds)
             named = dict(zip(self._dec_out_names, outs))
-            logits = named["logits"][0, -1].astype(np.float32)
-
-            logits[self.suppress] = -np.inf
-            logits[self.timestamp_begin :] = -np.inf   # no timestamps, ever
-            if first and len(self.begin_suppress):
-                logits[self.begin_suppress] = -np.inf
-
+            logits = self._filter(named["logits"][0, -1].astype(np.float32), at_start=first)
             next_tok = int(np.argmax(logits))
             if next_tok == self.eot:
                 break
@@ -348,6 +458,47 @@ class OnnxWhisperBackend(BaseBackend):
 
         return generated
 
+
+
+class _OnnxBeamAdapter:
+    """Advances every ONNX beam in one batched decoder call."""
+
+    def __init__(self, backend: "OnnxWhisperBackend", encoder_hidden: np.ndarray,
+                 enc_cache: dict, dec_cache: dict) -> None:
+        self._b = backend
+        self._hidden = encoder_hidden
+        self._enc = enc_cache
+        self._dec = dec_cache
+        self._hidden_b = encoder_hidden
+        self._enc_b: dict = enc_cache
+
+    def expand(self, n: int) -> dict:
+        # The cross-attention cache and the encoder states are a function of the
+        # audio alone — identical across beams and never reordered — so they are
+        # tiled once here and only ever sliced afterwards.
+        self._hidden_b = np.repeat(self._hidden, n, axis=0)
+        self._enc_b = {k: np.repeat(v, n, axis=0) for k, v in self._enc.items()}
+        return {k: np.repeat(v, n, axis=0) for k, v in self._dec.items()}
+
+    def step(self, last_tokens, state, index):
+        n = len(last_tokens)
+        feeds = {k: v[:n] for k, v in self._enc_b.items()}
+        feeds.update(state)
+        feeds["encoder_hidden_states"] = self._hidden_b[:n]
+        feeds["input_ids"] = np.array([[t] for t in last_tokens], dtype=np.int64)
+        feeds["use_cache_branch"] = np.array([True])
+
+        out = self._b.decoder.run(self._b._dec_out_names, feeds)
+        named = dict(zip(self._b._dec_out_names, out))
+        scores = log_softmax(
+            self._b._filter(named["logits"][:, -1].astype(np.float32), at_start=False)
+        )
+        _, dec = self._b._split_cache(named)
+        return scores, dec
+
+    def reorder(self, state, parents):
+        idx = np.asarray(parents, dtype=np.int64)
+        return {k: v[idx] for k, v in state.items()}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Provider resolution (CPU / QNN-Hexagon)
@@ -493,6 +644,8 @@ class QnnWhisperBackend(BaseBackend):
         slug, hf_repo = _QAI_MODELS[size]
         self.chipset = cfg.get("chipset") or detect_chipset()
         self.max_new_tokens = int(cfg.get("max_new_tokens", 180))
+        self.beam_size = max(1, int(cfg.get("beam_size", DEFAULT_BEAM_SIZE)))
+        self.length_penalty = float(cfg.get("length_penalty", DEFAULT_LENGTH_PENALTY))
         self._lock = threading.Lock()
 
         root = Path(cfg.get("model_dir") or DEFAULT_MODEL_DIR)
@@ -530,11 +683,9 @@ class QnnWhisperBackend(BaseBackend):
 
         # ── tokenizer + special tokens from the matching HF repo ───────────
         self.hf_dir = root / f"whisper-{size}"
-        if not (self.hf_dir / "tokenizer.json").exists():
-            from huggingface_hub import snapshot_download
-            log.info("Downloading tokenizer %s → %s", hf_repo, self.hf_dir)
-            snapshot_download(hf_repo, local_dir=str(self.hf_dir),
-                              allow_patterns=["*.json", "merges.txt"])
+        for name in _HF_TOKENIZER_FILES:
+            if not (self.hf_dir / name).exists():
+                hf_download(hf_repo, name, self.hf_dir / name)
         self.tokenizer = Tokenizer.from_file(str(self.hf_dir / "tokenizer.json"))
         gc = json.loads((self.hf_dir / "generation_config.json").read_text(encoding="utf-8"))
         self.sot = int(gc["decoder_start_token_id"])
@@ -583,17 +734,27 @@ class QnnWhisperBackend(BaseBackend):
             return False
 
     # ── the contract ─────────────────────────────────────────────────────────
-    def transcribe(self, audio: np.ndarray, language: str | None = None) -> str:
+    def transcribe(
+        self,
+        audio: np.ndarray,
+        language: str | None = None,
+        beam_size: int | None = None,
+    ) -> str:
         if audio is None or len(audio) == 0:
             return ""
         samples = (audio.astype(np.float32) / 32768.0) if audio.dtype == np.int16 \
             else np.asarray(audio, dtype=np.float32)
 
+        beams = self.beam_size if beam_size is None else max(1, int(beam_size))
+
         with self._lock:
             feats = log_mel_spectrogram(samples, self.mel_filters)[None].astype(np.float16)
             cross = dict(zip(self.enc_out_names,
                              self.encoder.run(None, {"input_features": feats})))
-            tokens = self._greedy_decode(cross, language)
+            if beams > 1:
+                tokens = self._beam_decode(cross, language, beams)
+            else:
+                tokens = self._greedy_decode(cross, language)
         return self.tokenizer.decode(tokens, skip_special_tokens=True).strip()
 
     def _prompt(self, language: str | None) -> list[int]:
@@ -607,47 +768,133 @@ class QnnWhisperBackend(BaseBackend):
             lang_id = self.lang_to_id.get("en", 50259)
         return [self.sot, lang_id, self.transcribe_tok, self.no_timestamps]
 
-    def _greedy_decode(self, cross: dict, language: str | None) -> list[int]:
+    def _empty_self_cache(self) -> tuple[list[np.ndarray], list[np.ndarray]]:
         S, L, H, D = self.seq_len, self.n_layers, self.n_heads, self.head_dim
-        k_self = [np.zeros((H, 1, D, S - 1), np.float16) for _ in range(L)]
-        v_self = [np.zeros((H, 1, S - 1, D), np.float16) for _ in range(L)]
+        k = [np.zeros((H, 1, D, S - 1), np.float16) for _ in range(L)]
+        v = [np.zeros((H, 1, S - 1, D), np.float16) for _ in range(L)]
+        return k, v
 
+    def _step(
+        self,
+        cross: dict,
+        token: int,
+        index: int,
+        k_self: list[np.ndarray],
+        v_self: list[np.ndarray],
+    ) -> tuple[np.ndarray, list[np.ndarray], list[np.ndarray]]:
+        """Run one decoder position and return (raw logits, new k cache, new v cache).
+
+        The caches are returned, never mutated in place — which is what makes beam
+        search cheap here.  Several candidate tokens can descend from one parent
+        beam and simply share a reference to that parent's cache, so a decode step
+        costs one NPU call per *live beam*, not per candidate.
+        """
+        S, L = self.seq_len, self.n_layers
+        mask = np.full((1, 1, 1, S), self.NEG, np.float16)
+        mask[:, :, :, S - 1 - index:] = np.float16(0)
+
+        feeds = dict(cross)
+        for i in range(L):
+            feeds[f"k_cache_self_{i}_in"] = k_self[i]
+            feeds[f"v_cache_self_{i}_in"] = v_self[i]
+        feeds["input_ids"] = np.array([[token]], np.int32)
+        feeds["attention_mask"] = mask
+        feeds["position_ids"] = np.array([index], np.int32)
+
+        res = dict(zip(self.dec_out_names, self.decoder.run(None, feeds)))
+        k_out = [res[f"k_cache_self_{i}_out"] for i in range(L)]
+        v_out = [res[f"v_cache_self_{i}_out"] for i in range(L)]
+        return res["logits"].reshape(-1).astype(np.float32), k_out, v_out
+
+    def _filter(self, logits: np.ndarray, at_start: bool) -> np.ndarray:
+        """Mask out tokens Whisper must never emit here (in place, on a copy)."""
+        logits[self.suppress] = -np.inf
+        logits[self.no_timestamps + 1:] = -np.inf      # no timestamps, ever
+        if at_start and len(self.begin_suppress):
+            logits[self.begin_suppress] = -np.inf
+        return logits
+
+    def _greedy_decode(self, cross: dict, language: str | None) -> list[int]:
+        k_self, v_self = self._empty_self_cache()
         prompt = self._prompt(language)
         out: list[int] = []
         x = prompt[0]
-        limit = min(S, len(prompt) + self.max_new_tokens)
+        limit = min(self.seq_len, len(prompt) + self.max_new_tokens)
 
         for index in range(limit):
-            mask = np.full((1, 1, 1, S), self.NEG, np.float16)
-            mask[:, :, :, S - 1 - index:] = np.float16(0)
-            feeds = dict(cross)
-            for i in range(L):
-                feeds[f"k_cache_self_{i}_in"] = k_self[i]
-                feeds[f"v_cache_self_{i}_in"] = v_self[i]
-            feeds["input_ids"] = np.array([[x]], np.int32)
-            feeds["attention_mask"] = mask
-            feeds["position_ids"] = np.array([index], np.int32)
-
-            res = dict(zip(self.dec_out_names, self.decoder.run(None, feeds)))
-            for i in range(L):
-                k_self[i] = res[f"k_cache_self_{i}_out"]
-                v_self[i] = res[f"v_cache_self_{i}_out"]
+            logits, k_self, v_self = self._step(cross, x, index, k_self, v_self)
 
             if index + 1 < len(prompt):          # still feeding the forced prompt
                 x = prompt[index + 1]
                 continue
 
-            logits = res["logits"].reshape(-1).astype(np.float32)
-            logits[self.suppress] = -np.inf
-            logits[self.no_timestamps + 1:] = -np.inf
-            if not out and len(self.begin_suppress):
-                logits[self.begin_suppress] = -np.inf
-            nxt = int(np.argmax(logits))
+            nxt = int(np.argmax(self._filter(logits, at_start=not out)))
             if nxt == self.eot:
                 break
             out.append(nxt)
             x = nxt
         return out
+
+    # ── beam search ──────────────────────────────────────────────────────────
+    def _beam_decode(self, cross: dict, language: str | None, beams: int) -> list[int]:
+        """Beam search over the fixed-shape QNN decoder.
+
+        The compiled QNN graph is batch-1 with static shapes, so unlike an ONNX
+        Runtime graph with a dynamic batch axis the beams cannot be folded into one
+        call — each live beam costs its own NPU invocation per step.  That is
+        affordable specifically because this is large-v3-turbo: the turbo
+        distillation cut the decoder from 32 layers to 4, so nearly all of the
+        per-utterance cost sits in the encoder, which still runs exactly once.
+
+        All the bookkeeping lives in backends/beam_search.py; this only says how a
+        QNN beam advances and how beams are reshuffled.
+        """
+        prompt = self._prompt(language)
+
+        # Prime the forced prompt once — every beam descends from that one cache.
+        k_self, v_self = self._empty_self_cache()
+        logits = np.zeros(1, np.float32)
+        for index, tok in enumerate(prompt):
+            logits, k_self, v_self = self._step(cross, tok, index, k_self, v_self)
+
+        first_scores = log_softmax(self._filter(logits, at_start=True))
+
+        return beam_search(
+            first_scores,
+            _QnnBeamAdapter(self, cross, k_self, v_self),
+            eot=self.eot,
+            beam_size=beams,
+            max_new_tokens=self.max_new_tokens,
+            length_penalty=self.length_penalty,
+            start_index=len(prompt) - 1,
+            max_index=self.seq_len - 1,
+        )
+
+
+class _QnnBeamAdapter:
+    """Advances QNN beams one decoder call at a time (the graph is batch-1)."""
+
+    def __init__(self, backend: "QnnWhisperBackend", cross: dict,
+                 k0: list[np.ndarray], v0: list[np.ndarray]) -> None:
+        self._b = backend
+        self._cross = cross
+        self._primed = (k0, v0)
+
+    def expand(self, n: int) -> list[tuple[list, list]]:
+        # The caches are never mutated in place, so n beams can share one object
+        # until they actually diverge — no copying needed here.
+        return [self._primed] * n
+
+    def step(self, last_tokens, state, index):
+        scores, new_state = [], []
+        for token, (k, v) in zip(last_tokens, state):
+            logits, nk, nv = self._b._step(self._cross, token, index, k, v)
+            scores.append(log_softmax(self._b._filter(logits, at_start=False)))
+            new_state.append((nk, nv))
+        return np.stack(scores), new_state
+
+    def reorder(self, state, parents):
+        return [state[p] for p in parents]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
