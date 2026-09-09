@@ -1,26 +1,27 @@
 # 姥姥 Laolao — Real-time Speech Captions for Video Calls
 
-**Fully offline, open source, Chinese-first live captioning. You speak; large subtitles appear on your camera feed, in real time, and the person on the other end reads them under your face.**
+**On-device, real-time transcription that puts subtitles on your own face during a video call — so the person who can't hear you can still follow every word.**
 
-![A young woman on a video call at a kitchen table at dusk, her grandmother's face on the laptop screen](docs/assets/hero-call.jpg)
+<table>
+<tr>
+<td width="33%"><img src="docs/assets/story-1-cannot-hear.jpg" alt="An elderly grandmother in a dim room leans close to her phone, hand cupped behind her ear, as the sound from a video call breaks apart before it reaches her"></td>
+<td width="33%"><img src="docs/assets/story-2-wish.jpg" alt="A young adult at a laptop late at night, chin in hand, imagining sitting across a real table from their grandmother, both smiling"></td>
+<td width="33%"><img src="docs/assets/story-3-captions.jpg" alt="The same video call, now with a bold subtitle bar under the young adult's face on both screens; the grandmother reads it and laughs"></td>
+</tr>
+<tr>
+<td valign="top"><strong>1 · She can't hear you.</strong><br>Her hearing has faded. On a video call she sees your face and nods through what she cannot follow. You end up repeating yourself, then giving up.</td>
+<td valign="top"><strong>2 · You want her to understand you, directly.</strong><br>Not through someone relaying, not by typing to her, not by making her learn a new app. Just you, talking, and her getting it.</td>
+<td valign="top"><strong>3 · So your words become subtitles on your own face, as you say them.</strong><br>Laolao transcribes your speech on your laptop's own chip, in real time, and paints it onto your camera picture before WeChat, Zoom or FaceTime ever see it. To her it's just you, with captions.</td>
+</tr>
+</table>
 
-## The call
+## On your device, in real time
 
-姥姥 is *lǎolao*, your mother's mother. Somewhere in her seventies her hearing started to go, and the weekly video call turned into a thing she nodded through. She could see your face. She could not follow what it was saying.
+Everything happens on the machine you're speaking into. Your voice goes into a Whisper model running on your laptop's neural processor — the Hexagon NPU on a Snapdragon PC, the Neural Engine on an Apple Silicon Mac — and comes back as text in well under a second, while you're still mid-sentence. The caption grows as you speak and settles the moment you pause.
 
-Laolao runs on your machine, not hers. It listens to your microphone, turns your words into text on a chip inside your laptop, and paints that text across the bottom of your own camera picture before the call app ever sees it. To WeChat, Zoom, FaceTime or WhatsApp it is just another camera. To her, it is you, with subtitles.
+Nothing you say leaves your computer. There is no account, no API key, no server, and after the one-time model download no network connection at all. She installs nothing and changes nothing: she opens the app she always has, and this time the words are there.
 
-<table><tr>
-<td width="46%"><img src="docs/assets/grandma-reads.jpg" alt="An elderly Chinese grandmother with white hair and round glasses holding a phone in both hands, reading a video call"></td>
-<td>
-
-She installs nothing. She changes nothing. She opens the same app she always has, and this time the words are there.
-
-Mandarin and Cantonese come out in Simplified Chinese; English, Japanese, Korean and a hundred other languages work too. The caption follows you as you speak, rewriting itself as the model hears more of the sentence, and settles the moment you pause.
-
-Nothing you say leaves your computer. There is no account, no key, no server. After the one-time model download, Laolao never touches the network again.
-
-</td></tr></table>
+<sub>**About the name.** 姥姥 (*lǎolao*) is one of the Chinese words for grandma — specifically your mother's mother, in northern Mandarin. That is who this was built for.</sub>
 
 ## How it works
 
