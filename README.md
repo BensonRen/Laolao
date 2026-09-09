@@ -47,22 +47,38 @@ Until then, build from source in under 5 minutes — see **Quick Start** below.
 
 ## Platform support
 
-| Platform | Status | Acceleration |
-|---|---|---|
-| macOS Apple Silicon (M1/M2/M3/M4) | ✅ Supported | MLX — Neural Engine |
-| macOS Intel | ⚠️ Untested | CPU faster-whisper |
-| Windows 10/11 (x86-64) | ✅ Beta | CPU faster-whisper (CUDA if available) |
-| Windows 11 on ARM64 (Snapdragon X / X2 Elite) | ✅ Beta | ONNX Runtime — **Hexagon NPU** via QNN |
-| Linux | ❌ Not yet | — |
+Three platforms are first-class. The same engine, the same overlay and the same
+config run on all of them; what differs is which hardware Whisper runs on.
 
-**Windows notes:**
-- Requires OBS Studio 28+ installed (provides the virtual camera driver)
-- Virtual camera requires a GUI/interactive session — does not work over SSH
-- Tested on Intel i7 with OBS 30
+| Platform | Whisper runs on | Status | Start here |
+|---|---|---|---|
+| **Windows 11 on ARM64 — Snapdragon X Elite / X2 Elite** | **Hexagon NPU** via ONNX Runtime QNN, `large-v3-turbo` | ✅ **Verified** | double-click `Laolao-arm64.bat` |
+| **macOS on Apple Silicon** (M1 – M4) | Neural Engine / GPU via MLX, `large-v3-turbo` | ✅ **Verified** | `./setup.sh` |
+| **Windows 10/11 x64** | CPU via faster-whisper, CUDA if an NVIDIA GPU is present | ⚠️ Should work — unverified | `setup.bat` |
+| macOS Intel, Linux | CPU via faster-whisper | ⚠️ Untested | `./setup.sh` |
 
-**Snapdragon / ARM64 notes:** different lane entirely — no `faster-whisper`, no
-Electron shell, and OBS installs itself. See
-[Quick Start — Windows on ARM64](#quick-start--windows-on-arm64-snapdragon) below.
+*Verified* means a clean machine, from `git clone` onward, with nothing
+pre-installed:
+
+- **Snapdragon X2 Elite** (Windows 11 ARM64, Python 3.11 ARM64): all ten
+  end-to-end acceptance criteria in `tests/acceptance_arm64.py` pass — boot
+  without `ctranslate2`, Mandarin ground-truth transcription, sub-second
+  partials, live WebSocket caption round trip, registered and loadable virtual
+  camera, fully offline operation, and the one-click launcher. Beam search on.
+- **Apple Silicon**: the full fast test suite passes and the decode benchmark
+  (`tests/bench_decode.py`) runs `large-v3-turbo` on MLX with beam search.
+- **Windows x64** has not had a clean-machine run yet. The code path is the
+  original one and is exercised by the unit tests in CI, but nobody has
+  double-clicked `setup.bat` on a fresh PC and watched it work. If you do, an
+  issue saying so — pass or fail — is the most useful contribution right now.
+
+**Windows notes (both architectures):** the virtual camera needs a GUI session
+and does not work over SSH. On x64, OBS Studio 28+ must be installed by you; on
+ARM64 the launcher fetches a portable copy itself.
+
+**Snapdragon / ARM64 is a different lane:** no `faster-whisper`, no Electron
+shell, OBS composites and owns the camera. See
+[Quick Start — Windows on ARM64](#quick-start--windows-on-arm64-snapdragon).
 
 ---
 
@@ -199,11 +215,13 @@ Open camera settings in your video call app and choose **"OBS Virtual Camera"**.
 
 Snapdragon PCs run a different lane. `faster-whisper` cannot install there at
 all — its `ctranslate2` dependency publishes no win-arm64 build — so Whisper
-runs on **ONNX Runtime against the Hexagon NPU** instead. In practice a caption
-appears about **0.85 s after you start speaking**, and the words reach the far
-end's screen about **0.65 s** after that. (Whisper itself takes only ~90 ms per
-pass on the NPU; the rest is voice-activity detection and frame timing. The
-90 ms figure is the interesting one for a benchmark, not the one you feel.)
+runs on **ONNX Runtime against the Hexagon NPU** instead. In practice the
+in-progress caption appears well under a second after you start speaking and the
+finished sentence lands under a second after you stop — measured end to end on
+an X2 Elite at **0.55 s** and **0.86 s** with `large-v3-turbo` and beam search
+on. (Whisper itself is ~0.46 s greedy or ~0.86 s at beam 4 per pass; the rest is
+voice-activity detection and frame timing. See `docs/DECODING.md` for the
+numbers and what they did and did not buy.)
 
 `pyvirtualcam` has no ARM64 wheel either, so a portable copy of **OBS ARM64 does
 the compositing and provides the camera**, and there is no Electron app in the
@@ -254,8 +272,8 @@ webcam back to other apps.
 
 | Constraint | Why | What it means for you |
 |---|---|---|
-| Models limited to `tiny` / `base` / `large-v3-turbo` | Only those have a precompiled Qualcomm NPU export. `small` and `medium` fall back to the CPU and run ~25× slower | Nothing to do. `config.json` still says `small` (it is shared with Mac/x86), and the ARM64 backend substitutes **`large-v3-turbo`**, saying so in the log. That is the most accurate model, and the NPU runs it in ~410 ms — well inside budget. Set `"model": "base"` only if you want the fastest possible partials and can accept noticeably worse Chinese |
-| First launch takes a couple of minutes | The Qualcomm NPU context for `large-v3-turbo` is compiled for your device the first time it loads (~117 s; ~6 s every launch after) | One-time. Setup does it up front so the first call is not the one that waits |
+| Models limited to `tiny` / `base` / `large-v3-turbo` | Only those have a precompiled Qualcomm NPU export. `small` and `medium` fall back to the CPU and run ~25× slower | Nothing to do. `config.json` still says `small` (it is shared with Mac/x86), and the ARM64 backend substitutes **`large-v3-turbo`**, saying so in the log. That is the most accurate model, and the NPU decodes it in ~0.46 s greedy / ~0.86 s at beam 4 — inside budget. Set `"model": "base"` only if you want the fastest possible partials and can accept noticeably worse Chinese |
+| First launch takes a few minutes | The Qualcomm NPU context for `large-v3-turbo` is compiled for your device the first time it loads (measured 4.5 min on an X2 Elite; ~6 s every launch after) | One-time. Setup does it up front so the first call is not the one that waits |
 | Silero VAD runs, but not via `pip install silero-vad` | That package declares a hard PyTorch dependency, and torch has no win-arm64 build. The weights are plain ONNX, so Laolao runs them directly on onnxruntime instead | Nothing to do — it is automatic. Laolao fetches `silero_vad.onnx` (2.3 MB) on first run and caches it. If that download fails it falls back to the energy VAD, which only measures loudness: steady room noise above about −40 dBFS then reads as talking, and Whisper invents captions from it ("Thank you very much."). Check the log line `VAD: Silero via onnxruntime` to confirm which one you got |
 | Echo cancellation is on | The caption window captures the mic through Chromium (which applies AEC) and streams it to the engine; Python runs `--no-mic` | Speakers are fine — the other person's voice is cancelled before it reaches Whisper, so it is not captioned as if you had said it. A headset is still the best option in a loud room |
 | Reduced toolbar | OBS does the compositing here, so there is no Electron control window | The caption window carries a **Lang** dropdown — switch 普通话 / 粤语 / English / 日本語 / 한국어 mid-call and it takes effect immediately — plus the audio level meter and the 🌐 UI-language selector. Colours, caption size and aspect ratio are **not** adjustable on this path: OBS renders the overlay in its own embedded browser, which cannot see this window's settings. Change those in `config.json` and the overlay URL parameters, or use the Electron app |
@@ -265,8 +283,7 @@ webcam back to other apps.
 | Keep the folder path short | A deep install path makes the NPU model extract incompletely, and the only symptom is captions becoming ~25× slower — nothing errors | Setup warns past 90 characters. `setx LAOLAO_MODEL_DIR C:\laolao-models` moves just the model cache |
 | `run.bat` / `setup.bat` don't apply | They install `faster-whisper` and expect a `venv\` | Use `Laolao-arm64.bat`; it maintains `.venv-arm64` |
 
-Full engineering detail — including the alternative Electron + emulated-x64
-camera path, kept documented as a fallback — is in
+What the launcher actually runs, and why this platform has its own lane, is in
 [`docs/snapdragon/`](docs/snapdragon/).
 
 ---
@@ -370,13 +387,24 @@ The banner auto-dismisses when the mic signal recovers.
 
 ## Model guide
 
-| Model | Size | Apple Silicon | Accuracy |
-|---|---|---|---|
-| `tiny` | 75 MB | ~50 ms/pass | Fair |
-| `base` | 145 MB | ~100 ms/pass | Good |
-| `small` | 465 MB | ~250 ms/pass | **Very good — recommended** |
-| `medium` | 1.5 GB | ~600 ms/pass | Excellent |
-| `large-v3` | 3 GB | ~1.5 s/pass | Best |
+| Model | Size | Apple Silicon (MLX) | Snapdragon NPU | Accuracy |
+|---|---|---|---|---|
+| `tiny` | 75 MB | ~50 ms/pass | ✅ export available | Fair |
+| `base` | 145 MB | ~100 ms/pass | ~130 ms/pass | Good |
+| `small` | 465 MB | ~250 ms/pass | ✗ no NPU export (CPU fallback) | Very good |
+| `medium` | 1.5 GB | ~600 ms/pass | ✗ no NPU export | Excellent |
+| `large-v3` | 3 GB | ~1.5 s/pass | ✗ no NPU export | Best |
+| `large-v3-turbo` | 1.6 GB | ~370 ms greedy / ~800 ms beam 4 | ~460 ms greedy / ~860 ms beam 4 | **Best for Chinese — recommended** |
+
+`large-v3-turbo` is the model to reach for on both verified platforms: its
+distillation kept the full 32-layer encoder but cut the decoder to 4 layers, so
+it has `large-v3` accuracy at a fraction of the decode cost — and it is the one
+model where beam search is cheap. Per-pass times are for a 4 s utterance with
+`tests/bench_decode.py`; the Snapdragon lane substitutes it automatically.
+
+Decoding uses beam search (`beam_size`, default 4) for finished captions and
+greedy decoding for the in-progress line. `docs/DECODING.md` records what that
+cost and what it bought.
 
 ---
 
@@ -558,7 +586,9 @@ Caption grandma's side too: tap the call's system audio output as a second sourc
 
 ## Contributing
 
-PRs and issues welcome. The project is intentionally small — `server.py` is the entire backend.
+PRs and issues welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
+per-platform test commands and what a useful bug report contains. The project is
+intentionally small: `server.py` is the entire caption engine.
 
 ### Running tests
 
@@ -584,7 +614,8 @@ venv\Scripts\python -m pytest tests/test_windows_headless.py -v
        def is_available(cls) -> bool: ...
        def transcribe(self, audio: np.ndarray, language: str | None) -> str: ...
    ```
-2. Register it in `backends/__init__.py` — priority order is MLX → CUDA → CPU → yours
+2. Register it in `backends/__init__.py` — priority order is MLX → CUDA → ONNX/QNN (Windows ARM64) → CPU → yours
+3. Accept the optional `beam_size` argument; if your runtime cannot beam-search itself, adapt it to `backends/beam_search.py` the way the ONNX, QNN and MLX backends do
 
 ### Adding a new VAD
 
@@ -592,6 +623,7 @@ Same pattern under `vad/` — implement `BaseVAD` with `is_speech(chunk: np.ndar
 
 ### Good first issues
 
+- [ ] **Windows x64 clean-machine verification** — run `setup.bat` on a fresh PC and report what happens
 - [ ] Signed DMG / NSIS installer for one-click install
 - [ ] Two-speaker mode — caption both sides of a call
 - [ ] Font size slider in the toolbar (currently URL-param only)

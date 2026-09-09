@@ -2,6 +2,13 @@
   "name": "laolao",
   "version": "0.2.0",
   "description": "Real-time speech captions for video calls — 老老",
+  "author": "Ben Ren",
+  "license": "MIT",
+  "homepage": "https://github.com/BensonRen/Laolao",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BensonRen/Laolao.git"
+  },
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -34,12 +41,30 @@
       "output": "../dist"
     },
     "extraResources": [
-      { "from": "resources/", "to": "resources/", "filter": ["**/*"] }
+      {
+        "from": "resources/",
+        "to": "resources/",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64", "arm64"] },
-        { "target": "portable", "arch": ["x64", "arm64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
       "icon": "icon.ico"
     },

@@ -591,7 +591,16 @@ def _benchmark(cfg: dict) -> None:
 
     audio_ms = 3000
     rtf = elapsed / audio_ms
-    log.info("Backend: %s", backend.name)
+    # One line a user on any platform can quote back: which lane they are on,
+    # which model actually loaded (the ARM64 path may have substituted it), and
+    # the decode settings in force.
+    eff = getattr(backend, "cfg", cfg)
+    log.info(
+        "ENGINE  backend=%s  model=%s  device=%s  beam=%d/%d (final/partial)  language=%s",
+        backend.name, eff.get("model", cfg.get("model")), eff.get("device", cfg.get("device")),
+        max(1, int(cfg.get("beam_size", 1))), max(1, int(cfg.get("partial_beam_size", 1))),
+        cfg.get("language"),
+    )
     log.info("Avg transcription time for 3 s audio: %.0f ms  (RTF=%.2f)", elapsed, rtf)
     if rtf < 0.2:
         log.info("Excellent! Real-time factor < 0.2 — low latency operation.")
