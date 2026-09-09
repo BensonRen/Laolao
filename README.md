@@ -1,4 +1,4 @@
-# 老老 Laolao — Real-time Speech Captions for Video Calls
+# 姥姥 Laolao — Real-time Speech Captions for Video Calls
 
 **Fully offline, open source, Chinese-first live captioning — double-click to launch, no OBS required.**
 
@@ -653,4 +653,4 @@ MIT — free to use, modify, and distribute.
 
 ---
 
-*老老 (Lǎolao) — maternal grandmother in Mandarin. Built so she can follow the conversation.*
+*姥姥 (lǎolao) — maternal grandmother in Mandarin. Built so she can follow the conversation.*

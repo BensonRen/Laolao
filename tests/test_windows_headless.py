@@ -250,8 +250,8 @@ def test_virtual_cam_tcp_port():
 def test_opencc_traditional_to_simplified():
     import opencc
     converter = opencc.OpenCC("t2s")
-    result = converter.convert("歡迎使用老老")
-    assert "欢迎使用老老" == result
+    result = converter.convert("歡迎使用姥姥")
+    assert "欢迎使用姥姥" == result
 
 # ── 8. Config file ────────────────────────────────────────────────────────────
 

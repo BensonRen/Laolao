@@ -731,7 +731,7 @@ app.whenReady().then(async () => {
     height: 720,
     x: workArea.x + Math.max(0, Math.round((workArea.width  - 1280) / 2)),
     y: workArea.y + Math.max(0, Math.round((workArea.height - 720) / 2)),
-    title: '老老 Laolao',
+    title: '姥姥 Laolao',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

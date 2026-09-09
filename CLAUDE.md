@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Laolao (老老) is a fully offline real-time speech-to-text captioning tool for video calls, Chinese-first (Mandarin/Cantonese, Traditional→Simplified via OpenCC). An Electron app composites live captions over the user's webcam feed and publishes the result as a virtual camera ("OBS Virtual Camera") that Zoom/WeChat/FaceTime select as their camera. All Whisper inference is local — no cloud APIs.
+Laolao (姥姥) is a fully offline real-time speech-to-text captioning tool for video calls, Chinese-first (Mandarin/Cantonese, Traditional→Simplified via OpenCC). An Electron app composites live captions over the user's webcam feed and publishes the result as a virtual camera ("OBS Virtual Camera") that Zoom/WeChat/FaceTime select as their camera. All Whisper inference is local — no cloud APIs.
 
 ## Commands
 

@@ -1,6 +1,6 @@
 # Laolao Test Suite
 
-Tests for the [Laolao (老老)](../README.md) real-time Chinese speech caption tool.
+Tests for the [Laolao (姥姥)](../README.md) real-time Chinese speech caption tool.
 
 ## Prerequisites
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Laolao (老老) — Real-time Chinese captions for video calls via OBS.
+Laolao (姥姥) — Real-time Chinese captions for video calls via OBS.
 
 Fully open source, runs offline. Chinese-first.
 GitHub: https://github.com/YOUR_USERNAME/laolao
