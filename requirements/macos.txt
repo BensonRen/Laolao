@@ -1,9 +1,9 @@
 # Laolao - macOS dependencies
-# Install: pip install -r requirements-macos.txt
+# Install: pip install -r requirements/macos.txt
 #
 # NOTE: mlx-whisper requires Apple Silicon (M1/M2/M3/M4).
-#       If you are on an Intel Mac, use requirements.txt instead:
-#         pip install -r requirements.txt
+#       If you are on an Intel Mac, use requirements/base.txt instead:
+#         pip install -r requirements/base.txt
 
 faster-whisper>=1.0.0
 sounddevice>=0.4.6
@@ -13,7 +13,7 @@ websockets>=12.0
 # Apple Silicon Neural Engine acceleration (M1/M2/M3/M4 only)
 mlx-whisper>=0.4.0
 
-# Silero-VAD (same as requirements.txt)
+# Silero-VAD (same as base.txt)
 silero-vad>=5.0
 
 # Traditional → Simplified Chinese conversion

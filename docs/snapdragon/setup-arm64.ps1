@@ -7,8 +7,8 @@
 
       1. find a NATIVE ARM64 Python 3.10+          (the one thing a human installs)
       2. create the .venv-arm64 virtual environment
-      3. install requirements-arm64.txt with --only-binary=:all:, then
-         requirements-arm64-nodeps.txt with --no-deps as well
+      3. install requirements/arm64.txt with --only-binary=:all:, then
+         requirements/arm64-nodeps.txt with --no-deps as well
          (deliberately NOT silero-vad / faster-whisper / pyvirtualcam - see that file)
       4. download the Whisper NPU model once so the first launch is not a surprise
       5. download portable OBS ARM64 and register the virtual camera per-user,
@@ -58,8 +58,8 @@ if (-not $ToolsRoot) { $ToolsRoot = (Join-Path (Split-Path $RepoRoot -Parent) 'l
 
 $VenvDir  = Join-Path $RepoRoot '.venv-arm64'
 $VenvPy   = Join-Path $VenvDir  'Scripts\python.exe'
-$ReqFile  = Join-Path $RepoRoot 'requirements-arm64.txt'
-$ReqNoDep = Join-Path $RepoRoot 'requirements-arm64-nodeps.txt'
+$ReqFile  = Join-Path $RepoRoot 'requirements\arm64.txt'
+$ReqNoDep = Join-Path $RepoRoot 'requirements\arm64-nodeps.txt'
 $VCamPs1  = Join-Path $PSScriptRoot 'laolao-vcam-setup.ps1'
 
 Write-Host ''
@@ -197,7 +197,7 @@ if ($needPip) {
     & $VenvPy -m pip install --quiet --disable-pip-version-check --upgrade pip
     & $VenvPy -m pip install --only-binary=:all: --disable-pip-version-check -r $ReqFile
     if ($LASTEXITCODE -ne 0) { Write-Bad "pip install failed ($LASTEXITCODE)"; exit 4 }
-    # tokenizers needs --no-deps on this platform - see requirements-arm64-nodeps.txt
+    # tokenizers needs --no-deps on this platform - see requirements/arm64-nodeps.txt
     & $VenvPy -m pip install --only-binary=:all: --no-deps --disable-pip-version-check -r $ReqNoDep
     if ($LASTEXITCODE -ne 0) { Write-Bad "pip install (no-deps) failed ($LASTEXITCODE)"; exit 4 }
     & $VenvPy -c $IMPORT_PROBE

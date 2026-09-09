@@ -1,7 +1,7 @@
 # Laolao - Python dependencies for Windows on ARM64 (Snapdragon)
-# Install: pip install --only-binary=:all: -r requirements-arm64.txt
+# Install: pip install --only-binary=:all: -r requirements/arm64.txt
 #
-# Use this file INSTEAD of requirements.txt on win-arm64. Three packages in
+# Use this file INSTEAD of base.txt on win-arm64. Three packages in
 # that file have no win-arm64 distribution and cannot be built here either
 # (the machine has no MSVC toolchain):
 #
@@ -12,7 +12,7 @@
 # --only-binary=:all: is not optional. Without it pip tries a source build and
 # fails several minutes later with a compiler error instead of immediately.
 #
-# `tokenizers` is NOT here. It lives in requirements-arm64-nodeps.txt and must be
+# `tokenizers` is NOT here. It lives in requirements/arm64-nodeps.txt and must be
 # installed with --no-deps; see that file for why.
 
 # Speech-to-text on the Hexagon NPU. onnxruntime-qnn is a plugin execution

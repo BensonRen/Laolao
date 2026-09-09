@@ -245,7 +245,7 @@ git clone https://github.com/BensonRen/Laolao
 ### 3. Double-click `Laolao-arm64.bat`
 
 That is the whole setup. On the first run it creates the Python environment,
-installs `requirements-arm64.txt`, downloads the Whisper NPU model (~200 MB)
+installs `requirements/arm64.txt`, downloads the Whisper NPU model (~200 MB)
 and a portable OBS ARM64 (~167 MB), and registers the virtual camera **for your
 user only** — no installer, no admin password, nothing written to `Program
 Files`. Later runs take about 6 seconds, and running it twice is harmless.

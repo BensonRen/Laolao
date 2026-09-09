@@ -7,7 +7,7 @@ them.
 | File | Role |
 |---|---|
 | `launch.ps1` | What the double-click does: runs setup if anything is missing, starts the caption engine and OBS, and prints which camera to pick. `-Stop`, `-Status`, `-Setup`, `-Arch` flags. |
-| `setup-arm64.ps1` | First-run setup: finds a native ARM64 Python, builds `.venv-arm64`, installs `requirements-arm64.txt` and `requirements-arm64-nodeps.txt`, pre-downloads the NPU model, delegates the camera to the script below. Idempotent. |
+| `setup-arm64.ps1` | First-run setup: finds a native ARM64 Python, builds `.venv-arm64`, installs `requirements/arm64.txt` and `requirements/arm64-nodeps.txt`, pre-downloads the NPU model, delegates the camera to the script below. Idempotent. |
 | `laolao-vcam-setup.ps1` | Downloads portable OBS ARM64 and registers its virtual camera **per user, without administrator rights**. Writes the OBS profile and scene. |
 | `laolao-obs-scene.json` | The OBS scene the camera script installs: your webcam plus `overlay/index.html` as a browser source. |
 

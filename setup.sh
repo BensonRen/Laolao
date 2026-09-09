@@ -69,9 +69,9 @@ fi
 # Silicon Mac never got mlx-whisper -- so config.json's "device": "mlx" silently
 # fell through to faster-whisper on the CPU. The app still worked, just several
 # times slower, and nothing said why. Choose explicitly and say which was chosen.
-REQ_FILE="requirements.txt"
+REQ_FILE="requirements/base.txt"
 if [[ "$OSTYPE" == "darwin"* && "$(uname -m)" == "arm64" ]]; then
-    REQ_FILE="requirements-macos.txt"
+    REQ_FILE="requirements/macos.txt"
 fi
 
 echo "Installing dependencies from $REQ_FILE ..."
@@ -79,7 +79,7 @@ pip install -r "$REQ_FILE"
 
 # Apple Silicon: the Neural Engine path is the whole point of this platform, so
 # a missing mlx-whisper is worth a loud warning rather than a silent slow mode.
-if [[ "$REQ_FILE" == "requirements-macos.txt" ]]; then
+if [[ "$REQ_FILE" == "requirements/macos.txt" ]]; then
     if python -c "import mlx_whisper" 2>/dev/null; then
         echo "  MLX (Apple Neural Engine) backend available."
     else

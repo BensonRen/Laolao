@@ -16,5 +16,3 @@ electron/node_modules/
 electron/resources/*.plugin
 dist/
 
-# Compiled virtual camera native library (built locally via vcam/build.sh)
-vcam/libvcam.dylib

@@ -1,5 +1,5 @@
 # Laolao - Python dependencies
-# Install: pip install -r requirements.txt
+# Install: pip install -r requirements/base.txt
 #
 # NOTE: If you have an NVIDIA GPU, install PyTorch with CUDA first:
 #   pip install torch --index-url https://download.pytorch.org/whl/cu121

@@ -59,8 +59,8 @@ if not errorlevel 1 (
 )
 
 REM ---------------------------------------------------------- dependencies ---
-echo Installing dependencies from requirements.txt ...
-pip install -r requirements.txt
+echo Installing dependencies from requirements\base.txt ...
+pip install -r requirements\base.txt
 if errorlevel 1 (
     echo.
     echo ERROR: pip install failed. Nothing above this line was installed.

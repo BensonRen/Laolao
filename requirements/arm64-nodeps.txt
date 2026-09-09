@@ -1,5 +1,5 @@
 # Laolao - win-arm64 packages that must be installed WITHOUT their dependencies.
-# Install: pip install --only-binary=:all: --no-deps -r requirements-arm64-nodeps.txt
+# Install: pip install --only-binary=:all: --no-deps -r requirements/arm64-nodeps.txt
 #
 # `tokenizers` gives us Whisper's BPE vocabulary (`tiktoken`, the openai-whisper
 # tokenizer path, has no win_arm64 wheel). It publishes a cp310-abi3 win_arm64
