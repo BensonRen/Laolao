@@ -410,6 +410,10 @@ cost and what it bought.
 
 ## Architecture
 
+How the captions appear to stream, and to correct themselves, from a model that
+can do neither is written up precisely in [`docs/STREAMING.md`](docs/STREAMING.md);
+what beam search cost and bought is in [`docs/DECODING.md`](docs/DECODING.md).
+
 ```
 Laolao.app  (Electron)
 │
