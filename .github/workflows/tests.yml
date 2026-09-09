@@ -26,6 +26,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          # The requirements live under requirements/, not at the root, and
+          # setup-python otherwise looks for a root requirements.txt to hash.
+          cache-dependency-path: requirements/*.txt
 
       # PortAudio is what sounddevice links against; the Linux runner has none.
       - name: System libraries (Linux)
