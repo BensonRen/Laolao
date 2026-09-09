@@ -439,10 +439,14 @@ The caption engine is a small state machine driven one audio chunk at a time:
 stateDiagram-v2
     [*] --> Idle
     Idle --> Speaking : speech chunk
-    Speaking --> Speaking : speech chunk — buffer grows, greedy partial every 0.35 s, beam-4 commit when it reaches 5 s
     Speaking --> Trailing : silent chunk
     Trailing --> Speaking : speech chunk
     Trailing --> Idle : 3 silent chunks — beam-4 final, buffer cleared
+    note right of Speaking
+        each speech chunk grows the buffer
+        every 0.35 s — greedy partial of the whole buffer
+        at 5 s — beam-4 commit, keep a 0.5 s tail
+    end note
 ```
 
 Every partial is the *whole* buffer decoded again from the start of the
