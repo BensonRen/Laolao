@@ -1,0 +1,41 @@
+name: Bug report
+description: Something did not work
+labels: [bug]
+body:
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Which row of the README's platform table are you on?
+      options:
+        - Windows 11 on ARM64 — Snapdragon X Elite / X2 Elite
+        - macOS on Apple Silicon
+        - Windows 10/11 x64
+        - macOS Intel
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: engine
+    attributes:
+      label: ENGINE line from the log
+      description: Printed once at startup. It says which backend, model and beam settings actually loaded.
+      placeholder: "ENGINE  backend=QnnWhisperBackend  model=large-v3-turbo  device=auto  beam=4/1 (final/partial)  language=zh"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you said, what the caption showed, and roughly when. A short screen recording of the overlay is worth more than a description.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant log lines
+      render: text

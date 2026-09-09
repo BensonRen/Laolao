@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Windows x64 clean-machine report
+    url: https://github.com/BensonRen/Laolao/issues/new?labels=platform-report&title=Windows+x64+clean-machine+run
+    about: Ran setup.bat on a fresh PC? Pass or fail, a short report here is the most useful thing you can send.
