@@ -103,11 +103,11 @@ Snapdragon X2 Elite, wiped machine, `git clone` onward, beam 4 on finals:
 PASS=10  FAIL=0  SKIP=0  BLOCKED=0
 ```
 
-All ten criteria in `docs/snapdragon/acceptance/check.py`, including the live
+All ten criteria in `tests/acceptance_arm64.py`, including the live
 WebSocket round trip (A6), the registered virtual camera (A7/A8), fully offline
 operation (A9) and the one-command launcher (A10). Reproduce with
-`docs\snapdragon\setup-arm64.ps1` followed by `check.py` with `server.py
---no-mic` running.
+`docs\snapdragon\setup-arm64.ps1` followed by `tests/acceptance_arm64.py` with
+`server.py --no-mic` running.
 
 ## Known gap
 

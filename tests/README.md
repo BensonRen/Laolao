@@ -68,7 +68,7 @@ This creates:
 Speech is synthesised with the platform's TTS: macOS `say`, or Windows SAPI
 (`System.Speech.Synthesis.SpeechSynthesizer`, writing 16 kHz / 16-bit / mono
 directly). Every speech WAV is written with a ground-truth `<stem>.txt` holding
-only its transcript — that is what `docs/snapdragon/acceptance/check.py` (A2/A3)
+only its transcript — that is what `tests/acceptance_arm64.py` (A2/A3)
 compares against. Provenance goes in `<stem>.source.json` and `fixtures/README.md`,
 and every generated WAV is read back and validated (rate, channels, bit depth,
 duration, peak amplitude) before the script reports success.

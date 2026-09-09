@@ -9,7 +9,7 @@ Auto-selects the best backend for the current platform:
 
 Windows-on-ARM64 note: faster-whisper cannot run there at all — its ctranslate2
 dependency publishes no win-arm64 distribution — so the ONNX backend is tried
-*before* the CPU fallback on that platform. See docs/snapdragon/NORTH_STAR.md.
+*before* the CPU fallback on that platform. See the README's Windows-on-ARM64 section.
 """
 
 from __future__ import annotations
@@ -147,7 +147,7 @@ def _no_backend_message(err: Exception) -> str:
             "faster-whisper cannot work here: its ctranslate2 dependency ships no "
             "win-arm64 distribution.\n"
             "Install the ONNX backend instead:  pip install onnxruntime\n"
-            "See docs/snapdragon/NORTH_STAR.md for the full platform picture."
+            "See the README's Windows-on-ARM64 section for the full platform picture."
         )
     return (
         f"No transcription backend is available ({err}).\n"

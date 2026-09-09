@@ -158,7 +158,7 @@ def mel_filter_bank(n_mels: int = 80, n_fft: int = N_FFT, sr: int = SAMPLE_RATE)
 
     Bit-for-bit equivalent (to <1e-7) with openai-whisper's ``assets/mel_filters.npz``
     and ``librosa.filters.mel(sr, n_fft, n_mels)``.  Verified in
-    ``docs/snapdragon/findings/ws_a_verify.py``.
+    the Snapdragon acceptance run (``tests/acceptance_arm64.py``).
     """
     n_freqs = n_fft // 2 + 1
     fftfreqs = np.linspace(0, sr / 2.0, n_freqs, dtype=np.float64)

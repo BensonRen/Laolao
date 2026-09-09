@@ -73,7 +73,7 @@ function Write-Warn2{ param([string]$m) Write-Host "    $m" -ForegroundColor Yel
 
 # ---------------------------------------------------------------- paths ----
 if (-not $RepoRoot) {
-    $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+    $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 }
 $OverlayHtml = Join-Path $RepoRoot 'overlay\index.html'
 $ObsExe      = Join-Path $ObsRoot 'bin\64bit\obs64.exe'

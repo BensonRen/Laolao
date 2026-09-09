@@ -12,7 +12,7 @@
          (deliberately NOT silero-vad / faster-whisper / pyvirtualcam - see that file)
       4. download the Whisper NPU model once so the first launch is not a surprise
       5. download portable OBS ARM64 and register the virtual camera per-user,
-         by delegating to findings\laolao-vcam-setup.ps1
+         by delegating to laolao-vcam-setup.ps1
 
     Idempotent: every step probes first and skips work that is already done, so
     re-running costs a couple of seconds. `-Force` redoes the venv and the pip
@@ -60,7 +60,7 @@ $VenvDir  = Join-Path $RepoRoot '.venv-arm64'
 $VenvPy   = Join-Path $VenvDir  'Scripts\python.exe'
 $ReqFile  = Join-Path $RepoRoot 'requirements-arm64.txt'
 $ReqNoDep = Join-Path $RepoRoot 'requirements-arm64-nodeps.txt'
-$VCamPs1  = Join-Path $PSScriptRoot 'findings\laolao-vcam-setup.ps1'
+$VCamPs1  = Join-Path $PSScriptRoot 'laolao-vcam-setup.ps1'
 
 Write-Host ''
 Write-Host '  Laolao - first-run setup for Windows on ARM64' -ForegroundColor White

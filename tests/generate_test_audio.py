@@ -20,7 +20,7 @@ Ground truth
 ------------
 Every *speech* WAV is written together with a ``.txt`` file of the same stem
 holding **only** the transcript.  That is the contract
-``docs/snapdragon/acceptance/check.py`` relies on (A2/A3): a transcript with
+``tests/acceptance_arm64.py`` relies on (A2/A3): a transcript with
 nothing to compare against proves nothing.  Provenance (voice, source URL,
 license) goes into a ``<stem>.source.json`` sidecar and ``README.md`` so it
 never contaminates the expected text.
@@ -914,7 +914,7 @@ def generate_test_fixtures(output_dir: Path, allow_download: bool = True) -> dic
     """Generate all standard test fixture WAV files in *output_dir*.
 
     Speech fixtures are always accompanied by a ``.txt`` ground truth of the
-    same stem — that is what ``docs/snapdragon/acceptance/check.py`` (A2/A3)
+    same stem — that is what ``tests/acceptance_arm64.py`` (A2/A3)
     looks for.  The platform TTS path is chosen automatically.
 
     Returns a dict mapping fixture name → Path (only includes files that
@@ -1061,7 +1061,7 @@ def write_fixture_readme(output_dir: Path, created: dict[str, Path]) -> Path:
         "The `.wav` files are gitignored; the `.txt` ground truth and this file are not.",
         "",
         "Every speech WAV has a `<stem>.txt` holding **only** its transcript —",
-        "that is the contract `docs/snapdragon/acceptance/check.py` (A2/A3) relies on.",
+        "that is the contract `tests/acceptance_arm64.py` (A2/A3) relies on.",
         "Provenance lives in `<stem>.source.json` and in the table below.",
         "",
         "| fixture | format | duration | peak | rms | ground truth | origin |",

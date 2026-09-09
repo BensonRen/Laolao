@@ -27,7 +27,7 @@ IS_ARM64 = platform.machine().lower() in ("arm64", "aarch64")
 # faster-whisper (via ctranslate2) and pyvirtualcam publish no win-arm64
 # distribution, so on Windows ARM64 these are not failures to fix — they are
 # packages that cannot exist. That platform uses the ONNX/QNN backend and an
-# out-of-process camera sink instead. See docs/snapdragon/NORTH_STAR.md.
+# out-of-process camera sink instead. See the README's Windows-on-ARM64 section.
 needs_x86_wheels = pytest.mark.skipif(
     IS_WIN and IS_ARM64,
     reason="no win-arm64 distribution: ctranslate2/faster-whisper and pyvirtualcam "

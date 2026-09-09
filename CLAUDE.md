@@ -35,6 +35,7 @@ pytest tests/test_latency.py -v -s          # Latency benchmarks
 pytest tests/test_virtualcam_macos.py -v -s # macOS virtual camera e2e diagnostic
 pytest tests/test_callapp_compat_macos.py -v -s  # call-app compatibility (AVFoundation enumeration)
 pytest tests/test_windows_headless.py -v -s # Windows headless e2e (SSH-runnable)
+python tests/acceptance_arm64.py            # Snapdragon ten-criterion acceptance (needs server.py --no-mic up)
 
 # Generate test fixtures before running audio-dependent tests
 python tests/generate_test_audio.py

@@ -8,9 +8,9 @@ the report. "Should work" is not a result here.
 
 Usage
 -----
-    python docs/snapdragon/acceptance/check.py                # run everything
-    python docs/snapdragon/acceptance/check.py --only A1 A2   # subset
-    python docs/snapdragon/acceptance/check.py --json out.json
+    python tests/acceptance_arm64.py                # run everything
+    python tests/acceptance_arm64.py --only A1 A2   # subset
+    python tests/acceptance_arm64.py --json out.json
 
 Run it with the interpreter of the lane under test:
     .venv-arm64\\Scripts\\python  ...   (native ONNX lane)
@@ -34,7 +34,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Callable
 
-REPO = Path(__file__).resolve().parents[3]
+REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 PASS, FAIL, SKIP, BLOCKED = "PASS", "FAIL", "SKIP", "BLOCKED"

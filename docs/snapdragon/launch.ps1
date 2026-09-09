@@ -66,7 +66,7 @@ $VenvPy      = Join-Path $RepoRoot '.venv-arm64\Scripts\python.exe'
 $ServerPy    = Join-Path $RepoRoot 'server.py'
 $OverlayHtml = Join-Path $RepoRoot 'overlay\index.html'
 $SetupPs1    = Join-Path $PSScriptRoot 'setup-arm64.ps1'
-$VCamPs1     = Join-Path $PSScriptRoot 'findings\laolao-vcam-setup.ps1'
+$VCamPs1     = Join-Path $PSScriptRoot 'laolao-vcam-setup.ps1'
 $ObsRoot     = Join-Path $ToolsRoot 'obs-arm64'
 $ObsExe      = Join-Path $ObsRoot 'bin\64bit\obs64.exe'
 # Where the ONNX/QNN backend caches models. Must match what the backend
