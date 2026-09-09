@@ -440,11 +440,11 @@ stateDiagram-v2
     direction LR
     [*] --> Idle
     Idle --> Speaking : speech chunk
-    Speaking --> Speaking : speech chunk, buffer grows; every 0.35 s a greedy partial
-    Speaking --> Speaking : buffer reaches 5 s; commit as a beam-4 final, keep a 0.5 s tail
+    Speaking --> Speaking : speech chunk — buffer grows, greedy partial every 0.35 s
+    Speaking --> Speaking : buffer reaches 5 s — beam-4 commit, keep a 0.5 s tail
     Speaking --> Trailing : silent chunk
     Trailing --> Speaking : speech chunk
-    Trailing --> Idle : 3 silent chunks; beam-4 final, buffer cleared
+    Trailing --> Idle : 3 silent chunks — beam-4 final, buffer cleared
 ```
 
 Every partial is the *whole* buffer decoded again from the start of the
