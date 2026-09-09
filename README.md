@@ -26,14 +26,10 @@ Nothing you say leaves your computer. There is no account, no key, no server. Af
 
 ```mermaid
 flowchart LR
-    mic([Your microphone]) --> vad[Voice activity<br/>detection]
-    vad --> buf[Utterance buffer<br/>re-decoded every 0.35 s]
-    buf --> whisper[Whisper large-v3-turbo<br/>on the NPU / Neural Engine]
-    whisper --> cc[Traditional → Simplified]
-    cc --> overlay[Caption overlay<br/>over your webcam]
-    overlay --> vcam[(Virtual camera)]
-    vcam --> app[WeChat · Zoom · FaceTime]
-    app --> her([Her phone])
+    mic([Your microphone]) --> whisper["Whisper large-v3-turbo<br/>on your laptop's NPU"]
+    whisper --> overlay["Captions painted<br/>over your webcam"]
+    overlay --> vcam[("Virtual camera<br/>WeChat · Zoom · FaceTime")]
+    vcam --> her([Her phone])
     style whisper fill:#c8321f,color:#fff,stroke:none
     style her fill:#fbe9e2,stroke:#c8321f
 ```
