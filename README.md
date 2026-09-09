@@ -1,31 +1,44 @@
 # 姥姥 Laolao — Real-time Speech Captions for Video Calls
 
-**Fully offline, open source, Chinese-first live captioning — double-click to launch, no OBS required.**
+**Fully offline, open source, Chinese-first live captioning. You speak; large subtitles appear on your camera feed, in real time, and the person on the other end reads them under your face.**
 
-Built for families calling elderly relatives with hearing difficulty. Speak naturally; giant subtitles appear on your camera feed in real time. Works with WeChat, Zoom, FaceTime, WhatsApp, and any other video call app.
+![A young woman on a video call at a kitchen table at dusk, her grandmother's face on the laptop screen](docs/assets/hero-call.jpg)
 
+## The call
+
+姥姥 is *lǎolao*, your mother's mother. Somewhere in her seventies her hearing started to go, and the weekly video call turned into a thing she nodded through. She could see your face. She could not follow what it was saying.
+
+Laolao runs on your machine, not hers. It listens to your microphone, turns your words into text on a chip inside your laptop, and paints that text across the bottom of your own camera picture before the call app ever sees it. To WeChat, Zoom, FaceTime or WhatsApp it is just another camera. To her, it is you, with subtitles.
+
+<table><tr>
+<td width="46%"><img src="docs/assets/grandma-reads.jpg" alt="An elderly Chinese grandmother with white hair and round glasses holding a phone in both hands, reading a video call"></td>
+<td>
+
+She installs nothing. She changes nothing. She opens the same app she always has, and this time the words are there.
+
+Mandarin and Cantonese come out in Simplified Chinese; English, Japanese, Korean and a hundred other languages work too. The caption follows you as you speak, rewriting itself as the model hears more of the sentence, and settles the moment you pause.
+
+Nothing you say leaves your computer. There is no account, no key, no server. After the one-time model download, Laolao never touches the network again.
+
+</td></tr></table>
+
+## How it works
+
+```mermaid
+flowchart LR
+    mic([Your microphone]) --> vad[Voice activity<br/>detection]
+    vad --> buf[Utterance buffer<br/>re-decoded every 0.35 s]
+    buf --> whisper[Whisper large-v3-turbo<br/>on the NPU / Neural Engine]
+    whisper --> cc[Traditional → Simplified]
+    cc --> overlay[Caption overlay<br/>over your webcam]
+    overlay --> vcam[(Virtual camera)]
+    vcam --> app[WeChat · Zoom · FaceTime]
+    app --> her([Her phone])
+    style whisper fill:#c8321f,color:#fff,stroke:none
+    style her fill:#fbe9e2,stroke:#c8321f
 ```
-You speak  →  local Whisper  →  captions overlay  →  virtual camera
-                (on-device)        (Electron app)       (Zoom sees it)
-                                                              ↓
-                                                 Grandma sees your face + subtitles
-```
 
-All audio processing is local. No cloud accounts. No API keys. No data leaves your machine.
-
----
-
-## Downloads
-
-> **Pre-built releases are coming soon** — subscribe to [Releases](https://github.com/BensonRen/Laolao/releases) on GitHub to be notified.
-
-Until then, build from source in under 5 minutes — see **Quick Start** below.
-
----
-
-## Demo
-
-> **Screenshot placeholder** — launch `Laolao.app`, speak, and drop a screenshot here.
+Whisper cannot stream; it transcribes a whole window at once. Laolao fakes streaming by re-transcribing the growing utterance from its start every third of a second and replacing the line on screen each time, so the caption grows and "corrects itself" as context arrives. The precise mechanism, including the part worth reusing in other projects, is in [`docs/STREAMING.md`](docs/STREAMING.md).
 
 ---
 
@@ -42,6 +55,15 @@ Until then, build from source in under 5 minutes — see **Quick Start** below.
 | **Customizable overlay** | Font size, text colors, background opacity, aspect ratio (9:16 / 16:9 / 4:3 / 1:1 / full), draggable caption block — all live. Settings persist. |
 | **Mic permission detection** | If no audio signal is detected for 15 seconds, a banner appears with a one-click button to open OS mic settings. Auto-dismisses when signal recovers. |
 | **Live debug panel** | Audio level meter, VAD dot, latency stats, and diagnostic hints in the toolbar. |
+
+---
+
+## Downloads
+
+Pre-built installers are not published yet; the project is source-first while
+the three platforms below are being verified. Building from source takes a few
+minutes on each — see the Quick Starts. Watch
+[Releases](https://github.com/BensonRen/Laolao/releases) for the first binaries.
 
 ---
 
@@ -403,16 +425,37 @@ model where beam search is cheap. Per-pass times are for a 4 s utterance with
 `tests/bench_decode.py`; the Snapdragon lane substitutes it automatically.
 
 Decoding uses beam search (`beam_size`, default 4) for finished captions and
-greedy decoding for the in-progress line. `docs/DECODING.md` records what that
-cost and what it bought.
+greedy decoding for the in-progress line:
+
+![Bar chart: time to transcribe a 4-second utterance with whisper-large-v3-turbo, greedy versus beam 4, on the Snapdragon X2 Elite NPU, Apple Silicon MLX, and the Snapdragon CPU fallback. Beam 4 costs 1.4 to 2.2 times greedy and stays inside the one-second partial budget on both accelerated platforms.](docs/assets/latency.svg)
+
+Beam 4 costs well under 4× because turbo's decoder is only four layers and the
+encoder runs once per pass. What it bought in accuracy, honestly, is in
+[`docs/DECODING.md`](docs/DECODING.md).
 
 ---
 
 ## Architecture
 
-How the captions appear to stream, and to correct themselves, from a model that
-can do neither is written up precisely in [`docs/STREAMING.md`](docs/STREAMING.md);
-what beam search cost and bought is in [`docs/DECODING.md`](docs/DECODING.md).
+The caption engine is a small state machine driven one audio chunk at a time:
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Idle
+    Idle --> Speaking : speech chunk
+    Speaking --> Speaking : speech chunk, buffer grows; every 0.35 s a greedy partial
+    Speaking --> Speaking : buffer reaches 5 s; commit as a beam-4 final, keep a 0.5 s tail
+    Speaking --> Trailing : silent chunk
+    Trailing --> Speaking : speech chunk
+    Trailing --> Idle : 3 silent chunks; beam-4 final, buffer cleared
+```
+
+Every partial is the *whole* buffer decoded again from the start of the
+utterance, and the overlay replaces the line rather than appending to it —
+that is the entire "streaming" and "correction" mechanism. The precise account
+is [`docs/STREAMING.md`](docs/STREAMING.md); what beam search cost and bought is
+[`docs/DECODING.md`](docs/DECODING.md).
 
 ```
 Laolao.app  (Electron)
