@@ -43,9 +43,15 @@ jobs:
       - name: Fixtures (synthetic only, no network audio)
         run: python tests/generate_test_audio.py --no-download
 
-      # test_windows_headless.py is an install-completeness diagnostic for a
-      # full x64 Windows setup (it asserts faster-whisper and pyvirtualcam
-      # import), not a unit test; against the minimal install above it can only
-      # fail. Run it on a real machine after setup.bat.
+      # Two files are end-to-end diagnostics for a real machine, not unit tests,
+      # and can only fail on a hosted runner:
+      #   test_windows_headless.py  asserts a full x64 install (faster-whisper,
+      #                             pyvirtualcam import) — run after setup.bat
+      #   test_virtualcam_macos.py  captures frames from the OBS camera
+      #                             extension, which needs the driver installed
+      #                             and a GUI session — run on a Mac with OBS
       - name: Fast suite
-        run: python -m pytest tests/ -m "not slow" -q --ignore=tests/test_windows_headless.py
+        run: >
+          python -m pytest tests/ -m "not slow" -q
+          --ignore=tests/test_windows_headless.py
+          --ignore=tests/test_virtualcam_macos.py
